@@ -59,13 +59,32 @@ fn numstat(n: Option<i64>) -> String {
     }
 }
 
-fn add_text_column(tree: &gtk::TreeView, title: &str, col: u32, expand: bool) {
+fn add_text_column(
+    tree: &gtk::TreeView,
+    title: &str,
+    col: u32,
+    expand: bool,
+    ellipsize: bool,
+) {
     let column = gtk::TreeViewColumn::builder().title(title).build();
     let cell = gtk::CellRendererText::new();
+    if ellipsize {
+        // keep long text from pushing the other columns off-screen
+        cell.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    }
     column.pack_start(&cell, !expand);
     column.add_attribute(&cell, "text", col as i32);
     column.set_expand(expand);
     tree.append_column(&column);
+}
+
+/// Expanding text columns use a fixed base width (grow, never shrink the
+/// neighbours) instead of their natural (full-text) width.
+fn make_expanding(tree: &gtk::TreeView, col: u32, base_width: i32) {
+    if let Some(c) = tree.columns().get(col as usize) {
+        c.set_sizing(gtk::TreeViewColumnSizing::Fixed);
+        c.set_fixed_width(base_width);
+    }
 }
 
 /// Messages from background threads, drained on the main loop.
@@ -188,6 +207,21 @@ fn main() -> ExitCode {
         .build();
 
     app.connect_activate(move |app| {
+        // Thicker scrollbars: the default theme's 6px overlay sliders are
+        // nearly impossible to grab (they also overlap the paned handles).
+        if let Some(display) = gtk::gdk::Display::default() {
+            let provider = gtk::CssProvider::new();
+            provider.load_from_data(
+                "scrollbar.horizontal slider { min-height: 12px; margin: 2px; }
+                 scrollbar.vertical slider { min-width: 12px; margin: 2px; }",
+            );
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+
         // ---- shared state ----------------------------------------------------
         // commit channel: the only sender lives in the load thread, so the
         // Disconnected error tells us when the load is finished
@@ -262,21 +296,26 @@ fn main() -> ExitCode {
         let filter_entry = gtk::SearchEntry::builder().build();
         filter_entry.set_placeholder_text(Some("Filter by commit message…"));
 
-        add_text_column(&ui.log_tree, "Hash", LOG_HASH, false);
+        add_text_column(&ui.log_tree, "Hash", LOG_HASH, false, false);
         if let Some(hash_col) = ui.log_tree.columns().get(0) {
             hash_col.set_sizing(gtk::TreeViewColumnSizing::Fixed);
             hash_col.set_fixed_width(90);
         }
-        add_text_column(&ui.log_tree, "Message", LOG_SUBJECT, true);
-        add_text_column(&ui.log_tree, "Committer", LOG_COMMITTER, false);
-        add_text_column(&ui.log_tree, "Author", LOG_AUTHOR, false);
-        add_text_column(&ui.log_tree, "Date", LOG_DATE, false);
+        add_text_column(&ui.log_tree, "Message", LOG_SUBJECT, true, true);
+        make_expanding(&ui.log_tree, LOG_SUBJECT, 320);
+        add_text_column(&ui.log_tree, "Committer", LOG_COMMITTER, false, false);
+        add_text_column(&ui.log_tree, "Author", LOG_AUTHOR, false, false);
+        add_text_column(&ui.log_tree, "Date", LOG_DATE, false, false);
 
         let log_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
             .vexpand(true)
             .build();
+        // Non-overlay: the scrollbar keeps its own space instead of floating
+        // over the content (where it is hard to grab and overlaps the
+        // paned handle).
+        log_scroll.set_overlay_scrolling(false);
         log_scroll.set_child(Some(&ui.log_tree));
 
         top_box.append(&ui.branch_label);
@@ -291,14 +330,15 @@ fn main() -> ExitCode {
         message_scroll.set_child(Some(&ui.message_view));
 
         // bottom pane: changed files
-        add_text_column(&ui.files_tree, "File", F_NAME, true);
+        add_text_column(&ui.files_tree, "File", F_NAME, true, true);
+        make_expanding(&ui.files_tree, F_NAME, 400);
         for (col, title, align) in [
             (F_ADDED, "Added", 1.0),
             (F_DELETED, "Deleted", 1.0),
             (F_SIZE, "Size", 1.0),
             (F_ACTION, "Action", 0.0),
         ] {
-            add_text_column(&ui.files_tree, title, col, false);
+            add_text_column(&ui.files_tree, title, col, false, false);
             if let Some(c) = ui.files_tree.columns().get(col as usize) {
                 c.set_sizing(gtk::TreeViewColumnSizing::Fixed);
                 c.set_fixed_width(90);
@@ -325,6 +365,8 @@ fn main() -> ExitCode {
                     let subject: String = model.get(iter, LOG_SUBJECT as i32);
                     subject.to_lowercase().contains(&q)
                 });
+                // GTK4 does not re-filter automatically when the function changes
+                log_filter.refilter();
             });
         }
 
