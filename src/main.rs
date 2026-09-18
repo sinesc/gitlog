@@ -358,15 +358,26 @@ fn main() -> ExitCode {
 
         // ---- commit list filtering ---------------------------------------------
         {
-            let log_filter = log_filter.clone();
+            // GTK4 (>=4.18) asserts if set_visible_func is called twice, so the
+            // function is installed once and reads the query from shared state;
+            // each keystroke only updates the query and calls refilter().
+            let query: Arc<std::cell::RefCell<String>> =
+                Arc::new(std::cell::RefCell::new(String::new()));
+            let q = Arc::clone(&query);
+            log_filter.set_visible_func(move |model, iter| {
+                // The filter may be consulted while a row is being inserted
+                // (before its cells are set), so read tolerantly.
+                let subject: String = model
+                    .get_value(iter, LOG_SUBJECT as i32)
+                    .get()
+                    .unwrap_or_default();
+                let q = q.borrow();
+                q.is_empty() || subject.to_lowercase().contains(q.as_str())
+            });
+            let lf = log_filter.clone();
             filter_entry.connect_search_changed(move |entry| {
-                let q = entry.text().to_lowercase();
-                log_filter.set_visible_func(move |model, iter| {
-                    let subject: String = model.get(iter, LOG_SUBJECT as i32);
-                    subject.to_lowercase().contains(&q)
-                });
-                // GTK4 does not re-filter automatically when the function changes
-                log_filter.refilter();
+                *query.borrow_mut() = entry.text().to_lowercase();
+                lf.refilter();
             });
         }
 
