@@ -129,7 +129,9 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
     cancel: &AtomicBool,
     mut on_commit: F,
 ) {
-    let pretty = format!("{MARK}%h{SEP}%an{SEP}%cn{SEP}%at{SEP}%s{SEP}%B");
+    // committer/author as "name <email>" so a rename or amending bot can be
+    // spotted at a glance
+    let pretty = format!("{MARK}%h{SEP}%an <%ae>{SEP}%cn <%ce>{SEP}%at{SEP}%s{SEP}%B");
     let mut child = match git(
         repo,
         &[
@@ -359,8 +361,8 @@ mod tests {
         // newest first: the rename commit
         let c = &commits[0];
         assert_eq!(c.subject, "third commit: rename b -> b2");
-        assert_eq!(c.author, "Tester");
-        assert_eq!(c.committer, "Tester");
+        assert_eq!(c.author, "Tester <t@t.t>");
+        assert_eq!(c.committer, "Tester <t@t.t>");
         assert_eq!(c.files.len(), 1);
         assert_eq!(c.files[0].name, "b.txt => b2.txt");
         assert_eq!(c.files[0].action, Action::Renamed);

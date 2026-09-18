@@ -15,9 +15,8 @@ mod gitlog;
 const LOG_HASH: u32 = 0;
 const LOG_SUBJECT: u32 = 1;
 const LOG_COMMITTER: u32 = 2;
-const LOG_AUTHOR: u32 = 3;
-const LOG_DATE: u32 = 4;
-const LOG_IDX: u32 = 5; // index into the commit cache (hidden)
+const LOG_DATE: u32 = 3;
+const LOG_IDX: u32 = 4; // index into the commit cache (hidden)
 
 const F_NAME: u32 = 0;
 const F_ADDED: u32 = 1;
@@ -105,13 +104,18 @@ impl Ui {
     fn insert_commit(&self, commit: gitlog::Commit) {
         let idx = self.commits.lock().unwrap().len() as i64;
         let iter = self.log_store.append();
+        // mark commits whose committer differs from the author (bot, amend…)
+        let committer = if commit.committer != commit.author {
+            format!("*{}", commit.committer)
+        } else {
+            commit.committer.clone()
+        };
         self.log_store.set(
             &iter,
             &[
                 (LOG_HASH, &commit.hash),
                 (LOG_SUBJECT, &commit.subject),
-                (LOG_COMMITTER, &commit.committer),
-                (LOG_AUTHOR, &commit.author),
+                (LOG_COMMITTER, &committer),
                 (LOG_DATE, &commit.date),
                 (LOG_IDX, &idx),
             ],
@@ -125,7 +129,16 @@ impl Ui {
             return None;
         };
         *self.selected_hash.lock().unwrap() = Some(commit.hash.clone());
-        self.message_view.buffer().set_text(&commit.message);
+        // header: committer always, author only when it differs from the
+        // committer, plus the short hash
+        let mut text = format!("Committer: {}\n", commit.committer);
+        if commit.committer != commit.author {
+            text.push_str(&format!("Author: {}\n", commit.author));
+        }
+        let short = commit.hash.get(..8).unwrap_or(&commit.hash);
+        text.push_str(&format!("Commit: {short}\n\n"));
+        text.push_str(&commit.message);
+        self.message_view.buffer().set_text(&text);
 
         self.files_store.clear();
         let cached = self
@@ -234,7 +247,6 @@ fn main() -> ExitCode {
                 glib::Type::STRING,
                 glib::Type::STRING,
                 glib::Type::STRING,
-                glib::Type::STRING,
                 glib::Type::I64,
             ]),
             log_tree: gtk::TreeView::builder().build(),
@@ -297,7 +309,6 @@ fn main() -> ExitCode {
         add_text_column(&ui.log_tree, "Message", LOG_SUBJECT, true, true);
         make_expanding(&ui.log_tree, LOG_SUBJECT, 320);
         add_text_column(&ui.log_tree, "Committer", LOG_COMMITTER, false, false);
-        add_text_column(&ui.log_tree, "Author", LOG_AUTHOR, false, false);
         add_text_column(&ui.log_tree, "Date", LOG_DATE, false, false);
 
         let log_scroll = gtk::ScrolledWindow::builder()
