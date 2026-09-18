@@ -46,6 +46,23 @@ fn lookup_path(display_name: &str) -> &str {
     display_name.rsplit("=>").next().unwrap_or(display_name).trim()
 }
 
+/// The pre-rename path of a rename ("a => b" -> "a"); "b" otherwise.
+fn lookup_old_path(display_name: &str) -> &str {
+    display_name.split("=>").next().unwrap_or(display_name).trim()
+}
+
+/// Writes the blob of `path` at `rev` to `dest` (empty file if it does not
+/// exist there, i.e. the file was added or deleted at that side).
+fn write_blob(repo: &std::path::Path, rev: &str, path: &str, dest: &std::path::Path) {
+    let Ok(out) = std::process::Command::new("git")
+        .args(["-C", &repo.to_string_lossy().into_owned(), "show", &format!("{rev}:{path}")])
+        .output()
+    else {
+        return;
+    };
+    let _ = std::fs::write(dest, &out.stdout);
+}
+
 fn numstat(n: Option<i64>) -> String {
     match n {
         Some(0) => "0".into(),
@@ -351,6 +368,44 @@ fn main() -> ExitCode {
         }
         let files_scroll = gtk::ScrolledWindow::builder().build();
         files_scroll.set_child(Some(&ui.files_tree));
+
+        // double-click a file: open its changes at the selected commit in meld
+        {
+            let files_store = ui.files_store.clone();
+            let selected_hash = ui.selected_hash.clone();
+            let repo = ui.repo.clone();
+            ui.files_tree.connect_row_activated(move |_tree, path, _column| {
+                let Some(iter) = files_store.iter(path) else {
+                    return;
+                };
+                let name: String = files_store.get(&iter, F_NAME as i32);
+                let Some(hash) = selected_hash.lock().unwrap().clone() else {
+                    return;
+                };
+                // temp files per (process, commit); left in the temp dir for
+                // the lifetime of the meld instance
+                let dir = std::env::temp_dir()
+                    .join(format!("gitlog-{}-{hash}", std::process::id()));
+                if std::fs::create_dir_all(&dir).is_err() {
+                    return;
+                }
+                // flat names so subdirectory paths stay valid
+                let old_file = dir.join(format!(
+                    "{}.old",
+                    lookup_old_path(&name).rsplit('/').next().unwrap_or("file")
+                ));
+                let new_file = dir.join(lookup_path(&name).rsplit('/').next().unwrap_or("file"));
+                // added files have no parent version, deleted files none now
+                write_blob(&repo, &format!("{hash}^"), lookup_old_path(&name), &old_file);
+                write_blob(&repo, &hash, lookup_path(&name), &new_file);
+                if let Err(e) = std::process::Command::new("meld")
+                    .args([&old_file, &new_file])
+                    .spawn()
+                {
+                    eprintln!("gitlog: cannot open meld: {e}");
+                }
+            });
+        }
 
         inner.set_start_child(Some(&top_box));
         inner.set_end_child(Some(&message_scroll));
