@@ -396,7 +396,7 @@ fn main() -> ExitCode {
                 let Some(path) = paths.into_iter().next() else {
                     return;
                 };
-                let Some(store_path) = log_filter.convert_child_path_to_path(&path) else {
+                let Some(store_path) = log_filter.convert_path_to_child_path(&path) else {
                     return;
                 };
                 let Some(store_iter) = log_store.iter(&store_path) else {
