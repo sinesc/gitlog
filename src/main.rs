@@ -213,7 +213,9 @@ fn main() -> ExitCode {
             let provider = gtk::CssProvider::new();
             provider.load_from_data(
                 "scrollbar.horizontal slider { min-height: 12px; margin: 2px; }
-                 scrollbar.vertical slider { min-width: 12px; margin: 2px; }",
+                 scrollbar.vertical slider { min-width: 12px; margin: 2px; }
+                 /* visible separators above and below the middle pane */
+                 .pane-separator { border-top: 2px solid @borders; border-bottom: 2px solid @borders; margin: 2px; }",
             );
             gtk::style_context_add_provider_for_display(
                 &display,
@@ -327,6 +329,7 @@ fn main() -> ExitCode {
             .buffer()
             .set_text("Loading commit history…");
         let message_scroll = gtk::ScrolledWindow::builder().build();
+        message_scroll.add_css_class("pane-separator");
         message_scroll.set_child(Some(&ui.message_view));
 
         // bottom pane: changed files
