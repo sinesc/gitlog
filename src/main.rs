@@ -27,10 +27,6 @@ const F_ACTION: u32 = 4;
 
 type SizeCache = HashMap<String, HashMap<String, u64>>;
 
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-}
-
 fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut v = bytes as f64;
@@ -102,7 +98,6 @@ struct Ui {
     files_store: gtk::ListStore,
     files_tree: gtk::TreeView,
     message_view: gtk::TextView,
-    branch_label: gtk::Label,
     repo: PathBuf,
 }
 
@@ -259,7 +254,6 @@ fn main() -> ExitCode {
                 .right_margin(8)
                 .top_margin(8)
                 .build(),
-            branch_label: gtk::Label::new(None),
             repo: repo.clone(),
         });
         // attach models now that the stores exist
@@ -268,12 +262,12 @@ fn main() -> ExitCode {
         ui.files_tree.set_model(Some(&ui.files_store));
 
         // ---- window & layout ---------------------------------------------------
-        let title = format!(
-            "gitlog — {}",
-            repo.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        );
+        let repo_name = repo
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let branch = gitlog::head_info(&repo);
+        let title = format!("gitlog - {repo_name} - {branch} - loading…");
         let window = gtk::Window::builder()
             .title(&title)
             .default_width(1100)
@@ -292,9 +286,6 @@ fn main() -> ExitCode {
         let top_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
-        let branch = gitlog::head_info(&repo);
-        ui.branch_label
-            .set_markup(&format!("<b>Branch:</b> {}  <span size=\"small\">loading…</span>", escape(&branch)));
         let filter_entry = gtk::SearchEntry::builder().build();
         filter_entry.set_placeholder_text(Some("Filter by commit message…"));
 
@@ -320,7 +311,6 @@ fn main() -> ExitCode {
         log_scroll.set_overlay_scrolling(false);
         log_scroll.set_child(Some(&ui.log_tree));
 
-        top_box.append(&ui.branch_label);
         top_box.append(&filter_entry);
         top_box.append(&log_scroll);
 
@@ -430,6 +420,8 @@ fn main() -> ExitCode {
             let commit_rx = Arc::new(Mutex::new(commit_rx));
             let size_rx = Arc::new(Mutex::new(size_rx));
             let ui = Arc::clone(&ui);
+            let win = window.clone();
+            let repo_name = repo_name.clone();
             let branch = branch.clone();
             let _id = glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
                 let rx = commit_rx.lock().unwrap();
@@ -447,11 +439,9 @@ fn main() -> ExitCode {
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                             // background load finished
                             let n = ui.commits.lock().unwrap().len();
-                            ui.branch_label.set_markup(&format!(
-                                "<b>Branch:</b> {}  <span size=\"small\">{} commits</span>",
-                                escape(&branch),
-                                n
-                            ));
+                            win.set_title(Some(&format!(
+                                "gitlog - {repo_name} - {branch} - {n} commits"
+                            )));
                             break;
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => break,
