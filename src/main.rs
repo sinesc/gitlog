@@ -9,8 +9,12 @@ extern crate gtk4 as gtk;
 
 use gtk::glib;
 use gtk::prelude::*;
+use rust_i18n::t;
+
+rust_i18n::i18n!("locales", fallback = "en");
 
 mod gitlog;
+mod i18n;
 
 const LOG_HASH: u32 = 0;
 const LOG_SUBJECT: u32 = 1;
@@ -71,6 +75,16 @@ fn numstat(n: Option<i64>) -> String {
     }
 }
 
+/// Localized label for a file change action, looked up in the locale files.
+fn action_label(action: gitlog::Action) -> String {
+    match action {
+        gitlog::Action::Added => t!("action.added").into_owned(),
+        gitlog::Action::Modified => t!("action.modified").into_owned(),
+        gitlog::Action::Deleted => t!("action.deleted").into_owned(),
+        gitlog::Action::Renamed => t!("action.renamed").into_owned(),
+    }
+}
+
 fn add_text_column(
     tree: &gtk::TreeView,
     title: &str,
@@ -115,6 +129,7 @@ struct Ui {
     files_tree: gtk::TreeView,
     message_view: gtk::TextView,
     repo: PathBuf,
+    locale: &'static str,
 }
 
 impl Ui {
@@ -127,13 +142,14 @@ impl Ui {
         } else {
             commit.committer.clone()
         };
+        let date = i18n::format_timestamp(commit.timestamp, self.locale);
         self.log_store.set(
             &iter,
             &[
                 (LOG_HASH, &commit.hash),
                 (LOG_SUBJECT, &commit.subject),
                 (LOG_COMMITTER, &committer),
-                (LOG_DATE, &commit.date),
+                (LOG_DATE, &date),
                 (LOG_IDX, &idx),
             ],
         );
@@ -148,12 +164,15 @@ impl Ui {
         *self.selected_hash.lock().unwrap() = Some(commit.hash.clone());
         // header: committer always, author only when it differs from the
         // committer, plus the short hash
-        let mut text = format!("Committer: {}\n", commit.committer);
+        let mut text = t!("commit.committer", name = &commit.committer).into_owned();
+        text.push('\n');
         if commit.committer != commit.author {
-            text.push_str(&format!("Author: {}\n", commit.author));
+            text.push_str(&t!("commit.author", name = &commit.author));
+            text.push('\n');
         }
         let short = commit.hash.get(..8).unwrap_or(&commit.hash);
-        text.push_str(&format!("Commit: {short}\n\n"));
+        text.push_str(&t!("commit.hash", hash = short));
+        text.push_str("\n\n");
         text.push_str(&commit.message);
         self.message_view.buffer().set_text(&text);
 
@@ -178,7 +197,7 @@ impl Ui {
                     (F_ADDED, &numstat(f.added)),
                     (F_DELETED, &numstat(f.deleted)),
                     (F_SIZE, &size),
-                    (F_ACTION, &f.action.label()),
+                    (F_ACTION, &action_label(f.action)),
                 ],
             );
         }
@@ -225,6 +244,10 @@ fn main() -> ExitCode {
         eprintln!("gitlog: {folder} is not a git repository");
         return ExitCode::FAILURE;
     }
+
+    // UI language: detected once from the system locale (phase 1; no UI switch)
+    let locale = i18n::detect_locale();
+    rust_i18n::set_locale(locale);
 
     let app = gtk::Application::builder()
         .application_id("dev.example.gitlog")
@@ -284,6 +307,7 @@ fn main() -> ExitCode {
                 .top_margin(8)
                 .build(),
             repo: repo.clone(),
+            locale,
         });
         // attach models now that the stores exist
         let log_filter = gtk::TreeModelFilter::new(&ui.log_store, None);
@@ -296,9 +320,9 @@ fn main() -> ExitCode {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let branch = gitlog::head_info(&repo);
-        let title = format!("gitlog - {repo_name} - {branch} - loading…");
+        let title = t!("title.loading", repo = &repo_name, branch = &branch);
         let window = gtk::Window::builder()
-            .title(&title)
+            .title(title)
             .default_width(1100)
             .default_height(760)
             .build();
@@ -316,17 +340,18 @@ fn main() -> ExitCode {
             .orientation(gtk::Orientation::Vertical)
             .build();
         let filter_entry = gtk::SearchEntry::builder().build();
-        filter_entry.set_placeholder_text(Some("Filter by commit message…"));
+        let placeholder = t!("filter.placeholder");
+        filter_entry.set_placeholder_text(Some(&placeholder));
 
-        add_text_column(&ui.log_tree, "Hash", LOG_HASH, false, false);
+        add_text_column(&ui.log_tree, &t!("col.hash"), LOG_HASH, false, false);
         if let Some(hash_col) = ui.log_tree.columns().get(0) {
             hash_col.set_sizing(gtk::TreeViewColumnSizing::Fixed);
             hash_col.set_fixed_width(90);
         }
-        add_text_column(&ui.log_tree, "Message", LOG_SUBJECT, true, true);
+        add_text_column(&ui.log_tree, &t!("col.message"), LOG_SUBJECT, true, true);
         make_expanding(&ui.log_tree, LOG_SUBJECT, 320);
-        add_text_column(&ui.log_tree, "Committer", LOG_COMMITTER, false, false);
-        add_text_column(&ui.log_tree, "Date", LOG_DATE, false, false);
+        add_text_column(&ui.log_tree, &t!("col.committer"), LOG_COMMITTER, false, false);
+        add_text_column(&ui.log_tree, &t!("col.date"), LOG_DATE, false, false);
 
         let log_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
@@ -345,21 +370,21 @@ fn main() -> ExitCode {
         // middle pane: full commit message
         ui.message_view
             .buffer()
-            .set_text("Loading commit history…");
+            .set_text(&t!("status.loading"));
         let message_scroll = gtk::ScrolledWindow::builder().build();
         message_scroll.add_css_class("pane-separator");
         message_scroll.set_child(Some(&ui.message_view));
 
         // bottom pane: changed files
-        add_text_column(&ui.files_tree, "File", F_NAME, true, true);
+        add_text_column(&ui.files_tree, &t!("file.name"), F_NAME, true, true);
         make_expanding(&ui.files_tree, F_NAME, 400);
         for (col, title, align) in [
-            (F_ADDED, "Added", 1.0),
-            (F_DELETED, "Deleted", 1.0),
-            (F_SIZE, "Size", 1.0),
-            (F_ACTION, "Action", 0.0),
+            (F_ADDED, t!("file.added"), 1.0),
+            (F_DELETED, t!("file.deleted"), 1.0),
+            (F_SIZE, t!("file.size"), 1.0),
+            (F_ACTION, t!("file.action"), 0.0),
         ] {
-            add_text_column(&ui.files_tree, title, col, false, false);
+            add_text_column(&ui.files_tree, &title, col, false, false);
             if let Some(c) = ui.files_tree.columns().get(col as usize) {
                 c.set_sizing(gtk::TreeViewColumnSizing::Fixed);
                 c.set_fixed_width(90);
@@ -505,8 +530,11 @@ fn main() -> ExitCode {
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                             // background load finished
                             let n = ui.commits.lock().unwrap().len();
-                            win.set_title(Some(&format!(
-                                "gitlog - {repo_name} - {branch} - {n} commits"
+                            win.set_title(Some(&t!(
+                                "title.done",
+                                repo = &repo_name,
+                                branch = &branch,
+                                count = n
                             )));
                             break;
                         }
@@ -545,3 +573,4 @@ fn main() -> ExitCode {
     let prog = env::args().next().unwrap_or_default();
     ExitCode::from(app.run_with_args(&[prog]).get())
 }
+

@@ -17,17 +17,6 @@ pub enum Action {
     Renamed,
 }
 
-impl Action {
-    pub fn label(self) -> &'static str {
-        match self {
-            Action::Added => "added",
-            Action::Modified => "modified",
-            Action::Deleted => "deleted",
-            Action::Renamed => "renamed",
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct FileStat {
     pub name: String,
@@ -45,7 +34,8 @@ pub struct Commit {
     pub message: String,
     pub author: String,
     pub committer: String,
-    pub date: String,
+    /// Committer unix timestamp; localized in the UI (see `i18n::format_timestamp`).
+    pub timestamp: i64,
     pub files: Vec<FileStat>,
 }
 
@@ -171,13 +161,6 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
                     actions: &mut VecDeque<Action>|
      -> bool {
         if let Some((hash, author, committer, ts)) = pending.take() {
-            let date = match glib::DateTime::from_unix_local(ts) {
-                Ok(d) => d
-                    .format("%a, %d %b %Y, %H:%M")
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|_| ts.to_string()),
-                Err(_) => ts.to_string(),
-            };
             let commit = Commit {
                 hash,
                 subject: subject.to_string(),
@@ -185,7 +168,7 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
                 message: message.join("\n").trim_end_matches('\n').to_string(),
                 author,
                 committer,
-                date,
+                timestamp: ts,
                 files: std::mem::take(files),
             };
             actions.clear();
@@ -368,8 +351,7 @@ mod tests {
         assert_eq!(c.files[0].action, Action::Renamed);
         assert_eq!(c.files[0].added, Some(0));
         assert_eq!(c.files[0].deleted, Some(0));
-        assert!(!c.date.is_empty());
-        assert!(c.date.contains(&c.hash) == false); // date, not a hash
+        assert!(c.timestamp > 0); // committer time, not a formatted string
 
         // second commit: modify + delete
         let c = &commits[1];

@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 glib = "0.22.9"
 gtk4 = "0.11.4"
+rust-i18n = "4.2.2"
