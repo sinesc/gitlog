@@ -21,6 +21,7 @@ const LOG_SUBJECT: u32 = 1;
 const LOG_COMMITTER: u32 = 2;
 const LOG_DATE: u32 = 3;
 const LOG_IDX: u32 = 4; // index into the commit cache (hidden)
+const LOG_TIP: u32 = 5; // 1 if the commit is a branch tip (hidden)
 
 const F_NAME: u32 = 0;
 const F_ADDED: u32 = 1;
@@ -91,15 +92,15 @@ fn add_text_column(
     col: u32,
     expand: bool,
     ellipsize: bool,
+    cell: &gtk::CellRendererText,
 ) {
     let column = gtk::TreeViewColumn::builder().title(title).build();
-    let cell = gtk::CellRendererText::new();
     if ellipsize {
         // keep long text from pushing the other columns off-screen
         cell.set_ellipsize(gtk::pango::EllipsizeMode::End);
     }
-    column.pack_start(&cell, !expand);
-    column.add_attribute(&cell, "text", col as i32);
+    column.pack_start(cell, !expand);
+    column.add_attribute(cell, "text", col as i32);
     column.set_expand(expand);
     tree.append_column(&column);
 }
@@ -125,6 +126,8 @@ struct Ui {
     selected_hash: Arc<Mutex<Option<String>>>,
     log_store: gtk::ListStore,
     log_tree: gtk::TreeView,
+    // cell of the message column, kept so branch tips can be coloured
+    log_subject_cell: gtk::CellRendererText,
     files_store: gtk::ListStore,
     files_tree: gtk::TreeView,
     message_view: gtk::TextView,
@@ -162,6 +165,7 @@ impl Ui {
                 (LOG_COMMITTER, &committer),
                 (LOG_DATE, &date),
                 (LOG_IDX, &idx),
+                (LOG_TIP, &i32::from(!commit.branches.is_empty())),
             ],
         );
         self.commits.lock().unwrap().push(commit);
@@ -299,8 +303,10 @@ fn main() -> ExitCode {
                 glib::Type::STRING,
                 glib::Type::STRING,
                 glib::Type::I64,
+                glib::Type::I32,
             ]),
             log_tree: gtk::TreeView::builder().build(),
+            log_subject_cell: gtk::CellRendererText::new(),
             files_store: gtk::ListStore::new(&[
                 glib::Type::STRING,
                 glib::Type::STRING,
@@ -354,15 +360,64 @@ fn main() -> ExitCode {
         let placeholder = t!("filter.placeholder");
         filter_entry.set_placeholder_text(Some(&placeholder));
 
-        add_text_column(&ui.log_tree, &t!("col.hash"), LOG_HASH, false, false);
+        add_text_column(
+            &ui.log_tree,
+            &t!("col.hash"),
+            LOG_HASH,
+            false,
+            false,
+            &gtk::CellRendererText::new(),
+        );
         if let Some(hash_col) = ui.log_tree.columns().get(0) {
             hash_col.set_sizing(gtk::TreeViewColumnSizing::Fixed);
             hash_col.set_fixed_width(90);
         }
-        add_text_column(&ui.log_tree, &t!("col.message"), LOG_SUBJECT, true, true);
+        add_text_column(
+            &ui.log_tree,
+            &t!("col.message"),
+            LOG_SUBJECT,
+            true,
+            true,
+            &ui.log_subject_cell,
+        );
+        // branch tips are accented so they stand out in the list; the data
+        // func runs before every draw, so the colour is reset for normal
+        // rows (the named colour is resolved once; Adwaita's accent as fallback)
+        let accent = glib::Object::new::<gtk::StyleContext>()
+            .lookup_color("accent")
+            .unwrap_or(gtk::gdk::RGBA::new(0.208, 0.518, 0.894, 1.0));
+        if let Some(column) = ui.log_tree.columns().get(LOG_SUBJECT as usize) {
+            let tip_cell = ui.log_subject_cell.clone();
+            column.set_cell_data_func(
+                &tip_cell,
+                move |_column, cell, model, iter| {
+                    let tip: i32 = model.get(iter, LOG_TIP as i32);
+                    if let Some(text) = cell.downcast_ref::<gtk::CellRendererText>() {
+                        match tip {
+                            1 => text.set_foreground_rgba(Some(&accent)),
+                            _ => text.set_foreground_rgba(None),
+                        }
+                    }
+                },
+            );
+        }
         make_expanding(&ui.log_tree, LOG_SUBJECT, 320);
-        add_text_column(&ui.log_tree, &t!("col.committer"), LOG_COMMITTER, false, false);
-        add_text_column(&ui.log_tree, &t!("col.date"), LOG_DATE, false, false);
+        add_text_column(
+            &ui.log_tree,
+            &t!("col.committer"),
+            LOG_COMMITTER,
+            false,
+            false,
+            &gtk::CellRendererText::new(),
+        );
+        add_text_column(
+            &ui.log_tree,
+            &t!("col.date"),
+            LOG_DATE,
+            false,
+            false,
+            &gtk::CellRendererText::new(),
+        );
 
         let log_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
@@ -387,7 +442,14 @@ fn main() -> ExitCode {
         message_scroll.set_child(Some(&ui.message_view));
 
         // bottom pane: changed files
-        add_text_column(&ui.files_tree, &t!("file.name"), F_NAME, true, true);
+        add_text_column(
+            &ui.files_tree,
+            &t!("file.name"),
+            F_NAME,
+            true,
+            true,
+            &gtk::CellRendererText::new(),
+        );
         make_expanding(&ui.files_tree, F_NAME, 400);
         for (col, title, align) in [
             (F_ADDED, t!("file.added"), 1.0),
@@ -395,7 +457,14 @@ fn main() -> ExitCode {
             (F_SIZE, t!("file.size"), 1.0),
             (F_ACTION, t!("file.action"), 0.0),
         ] {
-            add_text_column(&ui.files_tree, &title, col, false, false);
+            add_text_column(
+                &ui.files_tree,
+                &title,
+                col,
+                false,
+                false,
+                &gtk::CellRendererText::new(),
+            );
             if let Some(c) = ui.files_tree.columns().get(col as usize) {
                 c.set_sizing(gtk::TreeViewColumnSizing::Fixed);
                 c.set_fixed_width(90);
