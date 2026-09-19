@@ -9,7 +9,7 @@
 use std::env;
 
 /// Weekday and month abbreviations used by `format_date`.
-/// `weekdays` is indexed by glib's day_of_week() (0 = Sunday .. 6 = Saturday),
+/// `weekdays` is indexed by glib's day_of_week() - 1 (1 = Monday .. 7 = Sunday),
 /// `months` by month() - 1 (January first).
 #[derive(Debug)]
 struct DateNames {
@@ -18,49 +18,49 @@ struct DateNames {
 }
 
 const EN: DateNames = DateNames {
-    weekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
     months: [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun",
         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ],
 };
 const DE: DateNames = DateNames {
-    weekdays: ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
+    weekdays: ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"],
     months: [
         "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
         "Jul", "Aug", "Sep", "Okt", "Nov", "Dez",
     ],
 };
 const FR: DateNames = DateNames {
-    weekdays: ["dim", "lun", "mar", "mer", "jeu", "ven", "sam"],
+    weekdays: ["lun", "mar", "mer", "jeu", "ven", "sam", "dim"],
     months: [
         "janv.", "févr.", "mars", "avr.", "mai", "juin",
         "juil.", "août", "sept.", "oct.", "nov.", "déc.",
     ],
 };
 const ES: DateNames = DateNames {
-    weekdays: ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"],
+    weekdays: ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"],
     months: [
         "ene", "feb", "mar", "abr", "may", "jun",
         "jul", "ago", "sep", "oct", "nov", "dic",
     ],
 };
 const IT: DateNames = DateNames {
-    weekdays: ["dom", "lun", "mar", "mer", "gio", "ven", "sab"],
+    weekdays: ["lun", "mar", "mer", "gio", "ven", "sab", "dom"],
     months: [
         "gen", "feb", "mar", "apr", "mag", "giu",
         "lug", "ago", "set", "ott", "nov", "dic",
     ],
 };
 const NL: DateNames = DateNames {
-    weekdays: ["zo", "ma", "di", "wo", "do", "vr", "za"],
+    weekdays: ["ma", "di", "wo", "do", "vr", "za", "zo"],
     months: [
         "jan", "feb", "mrt", "apr", "mei", "jun",
         "jul", "aug", "sep", "okt", "nov", "dec",
     ],
 };
 const PT: DateNames = DateNames {
-    weekdays: ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"],
+    weekdays: ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"],
     months: [
         "jan", "fev", "mar", "abr", "mai", "jun",
         "jul", "ago", "set", "out", "nov", "dez",
@@ -108,7 +108,8 @@ pub fn detect_locale() -> &'static str {
 /// "ddd, dd Mon yyyy, HH:MM" with the weekday and month names in `locale`.
 pub fn format_date(dt: &glib::DateTime, locale: &str) -> String {
     let names = date_names(locale);
-    let weekday = names.weekdays[dt.day_of_week() as usize];
+    // day_of_week() is 1 = Monday .. 7 = Sunday; the table is Monday-first.
+    let weekday = names.weekdays[dt.day_of_week() as usize - 1];
     let month = names.months[dt.month() as usize - 1];
     format!(
         "{weekday}, {:02} {month} {:04}, {:02}:{:02}",
@@ -161,6 +162,19 @@ mod tests {
         assert_eq!(format_date(&dt, "pt"), "seg, 06 jan 2025, 14:30");
         // unknown locale falls back to English
         assert_eq!(format_date(&dt, "pl"), "Mon, 06 Jan 2025, 14:30");
+    }
+
+    #[test]
+    fn date_sunday_5_jan_2025() {
+        // 5 Jan 2025 is a Sunday; day_of_week() == 7 used to index out of bounds
+        let dt = glib::DateTime::from_local(2025, 1, 5, 9, 0, 0.0).unwrap();
+        assert_eq!(format_date(&dt, "en"), "Sun, 05 Jan 2025, 09:00");
+        assert_eq!(format_date(&dt, "de"), "So, 05 Jan 2025, 09:00");
+        assert_eq!(format_date(&dt, "fr"), "dim, 05 janv. 2025, 09:00");
+        assert_eq!(format_date(&dt, "es"), "dom, 05 ene 2025, 09:00");
+        assert_eq!(format_date(&dt, "it"), "dom, 05 gen 2025, 09:00");
+        assert_eq!(format_date(&dt, "nl"), "zo, 05 jan 2025, 09:00");
+        assert_eq!(format_date(&dt, "pt"), "dom, 05 jan 2025, 09:00");
     }
 
     #[test]
