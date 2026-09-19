@@ -30,6 +30,9 @@ pub struct FileStat {
 #[derive(Clone)]
 pub struct Commit {
     pub hash: String,
+    /// Names of local/remote branches whose tip is this commit (empty for
+    /// commits that are not at the tip of any branch)
+    pub branches: Vec<String>,
     pub subject: String,
     pub message: String,
     pub author: String,
@@ -88,6 +91,33 @@ pub fn head_info(repo: &Path) -> String {
     }
 }
 
+/// Map of full commit hash -> branch names (local and remote) whose tip
+/// is that commit, in refname order.
+pub fn branch_tips(repo: &Path) -> HashMap<String, Vec<String>> {
+    let Ok(output) = Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "for-each-ref",
+            "refs/heads",
+            "refs/remotes",
+            "--format=%(objectname)\x01%(refname:short)",
+        ])
+        .output()
+    else {
+        return HashMap::new();
+    };
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some((hash, name)) = line.split_once('\x01') {
+            map.entry(hash.trim().to_string())
+                .or_default()
+                .push(name.to_string());
+        }
+    }
+    map
+}
+
 /// File sizes (bytes) of all files at the given commit, keyed by path.
 pub fn file_sizes(repo: &Path, hash: &str) -> HashMap<String, u64> {
     let Ok(output) = Command::new("git")
@@ -121,7 +151,9 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
 ) {
     // committer/author as "name <email>" so a rename or amending bot can be
     // spotted at a glance
-    let pretty = format!("{MARK}%h{SEP}%an <%ae>{SEP}%cn <%ce>{SEP}%at{SEP}%s{SEP}%B");
+    let tips = branch_tips(repo);
+    let pretty =
+        format!("{MARK}%h{SEP}%H{SEP}%an <%ae>{SEP}%cn <%ce>{SEP}%at{SEP}%s{SEP}%B");
     let mut child = match git(
         repo,
         &[
@@ -145,7 +177,7 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
     let mut line = String::new();
 
     // record in flight
-    let mut pending: Option<(String, String, String, i64)> = None; // hash, author, committer, ts
+    let mut pending: Option<(String, String, String, String, i64)> = None; // short-hash, full-hash, author, committer, ts
     let mut subject = String::new();
     let mut message: Vec<String> = Vec::new();
     let mut files: Vec<FileStat> = Vec::new();
@@ -154,15 +186,17 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
 
     let mut send = |c: Commit| on_commit(c);
 
-    let mut flush = |pending: &mut Option<(String, String, String, i64)>,
+    let mut flush = |pending: &mut Option<(String, String, String, String, i64)>,
                     subject: &str,
                     message: &mut Vec<String>,
                     files: &mut Vec<FileStat>,
                     actions: &mut VecDeque<Action>|
      -> bool {
-        if let Some((hash, author, committer, ts)) = pending.take() {
+        if let Some((hash, full, author, committer, ts)) = pending.take() {
+            let branches = tips.get(&full).cloned().unwrap_or_default();
             let commit = Commit {
                 hash,
+                branches,
                 subject: subject.to_string(),
                 // %B carries trailing newlines; trim them
                 message: message.join("\n").trim_end_matches('\n').to_string(),
@@ -204,18 +238,19 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
                 break;
             }
             let fields: Vec<&str> = rest.split(SEP).collect();
-            // fields: 0=hash 1=author 2=committer 3=timestamp 4=subject 5=%B body
-            if fields.len() < 6 {
+            // fields: 0=short-hash 1=full-hash 2=author 3=committer 4=timestamp 5=subject 6=%B body
+            if fields.len() < 7 {
                 continue;
             }
             pending = Some((
                 fields[0].to_string(),
                 fields[1].to_string(),
                 fields[2].to_string(),
-                fields[3].parse().unwrap_or(0),
+                fields[3].to_string(),
+                fields[4].parse().unwrap_or(0),
             ));
-            subject = fields[4].to_string();
-            message = vec![fields[5].to_string()];
+            subject = fields[5].to_string();
+            message = vec![fields[6].to_string()];
             continue;
         }
 
@@ -341,8 +376,9 @@ mod tests {
 
         assert_eq!(commits.len(), 3);
 
-        // newest first: the rename commit
+        // newest first: the rename commit, tip of main -> marked with the branch
         let c = &commits[0];
+        assert_eq!(c.branches, vec!["main"]);
         assert_eq!(c.subject, "third commit: rename b -> b2");
         assert_eq!(c.author, "Tester <t@t.t>");
         assert_eq!(c.committer, "Tester <t@t.t>");
@@ -353,8 +389,9 @@ mod tests {
         assert_eq!(c.files[0].deleted, Some(0));
         assert!(c.timestamp > 0); // committer time, not a formatted string
 
-        // second commit: modify + delete
+        // second commit: modify + delete, not at any branch tip
         let c = &commits[1];
+        assert!(c.branches.is_empty());
         assert_eq!(c.subject, "second commit");
         assert_eq!(c.message, "second commit");
         assert_eq!(c.files.len(), 2);
@@ -387,8 +424,25 @@ mod tests {
         .unwrap()
         .trim()
         .to_string();
+        let second = std::str::from_utf8(
+            &Command::new("git")
+                .args(["-C", &dir.to_string_lossy(), "rev-parse", "HEAD~1"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
         let sizes = file_sizes(&dir, &head);
         assert_eq!(sizes.get("b2.txt"), Some(&2));
         assert_eq!(sizes.get("a.txt"), Some(&18));
+
+        // branch tips: local branch first, then remote-tracking branches
+        git(&dir, &["update-ref", "refs/remotes/origin/main", &head]);
+        git(&dir, &["update-ref", "refs/remotes/github/main", &second]);
+        let tips = branch_tips(&dir);
+        assert_eq!(tips.get(&head), Some(&vec!["main".to_string(), "origin/main".to_string()]));
+        assert_eq!(tips.get(&second), Some(&vec!["github/main".to_string()]));
     }
 }

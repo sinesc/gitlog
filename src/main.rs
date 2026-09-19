@@ -143,11 +143,22 @@ impl Ui {
             commit.committer.clone()
         };
         let date = i18n::format_timestamp(commit.timestamp, self.locale);
+        // branch tips are marked in the list, e.g. "[master] [origin/master] msg"
+        let subject = if commit.branches.is_empty() {
+            commit.subject.clone()
+        } else {
+            let mut prefixed = String::new();
+            for b in &commit.branches {
+                prefixed.push_str(&format!("[{b}] "));
+            }
+            prefixed.push_str(&commit.subject);
+            prefixed
+        };
         self.log_store.set(
             &iter,
             &[
                 (LOG_HASH, &commit.hash),
-                (LOG_SUBJECT, &commit.subject),
+                (LOG_SUBJECT, &subject),
                 (LOG_COMMITTER, &committer),
                 (LOG_DATE, &date),
                 (LOG_IDX, &idx),
