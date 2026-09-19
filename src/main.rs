@@ -574,3 +574,32 @@ fn main() -> ExitCode {
     ExitCode::from(app.run_with_args(&[prog]).get())
 }
 
+#[cfg(test)]
+mod i18n_resolution_tests {
+    // Verify every supported locale actually resolves its strings, using the
+    // explicit `locale=` argument so the global locale is never touched and
+    // tests cannot race each other.
+
+    #[test]
+    fn col_date_resolves_in_every_locale() {
+        assert_eq!(rust_i18n::t!("col.date", locale = "en"), "Date");
+        assert_eq!(rust_i18n::t!("col.date", locale = "de"), "Datum");
+        assert_eq!(rust_i18n::t!("col.date", locale = "fr"), "Date");
+        assert_eq!(rust_i18n::t!("col.date", locale = "es"), "Fecha");
+        assert_eq!(rust_i18n::t!("col.date", locale = "it"), "Data");
+        assert_eq!(rust_i18n::t!("col.date", locale = "nl"), "Datum");
+        assert_eq!(rust_i18n::t!("col.date", locale = "pt"), "Data");
+    }
+
+    #[test]
+    fn title_done_resolves_and_interpolates_in_every_locale() {
+        let repo = "acme";
+        let branch = "main";
+        let n: usize = 3;
+        assert_eq!(rust_i18n::t!("title.done", locale = "en", repo = &repo, branch = &branch, count = n), "gitlog - acme - main - 3 commits");
+        assert_eq!(rust_i18n::t!("title.done", locale = "de", repo = &repo, branch = &branch, count = n), "gitlog - acme - main - 3 Commits");
+        assert_eq!(rust_i18n::t!("title.done", locale = "it", repo = &repo, branch = &branch, count = n), "gitlog - acme - main - 3 commit");
+        assert_eq!(rust_i18n::t!("title.done", locale = "nl", repo = &repo, branch = &branch, count = n), "gitlog - acme - main - 3 commits");
+    }
+}
+

@@ -1,0 +1,22 @@
+{
+  "col.hash": "Hash",
+  "col.message": "Mensagem",
+  "col.committer": "Committer",
+  "col.date": "Data",
+  "file.name": "Ficheiro",
+  "file.added": "Adicionado",
+  "file.deleted": "Eliminado",
+  "file.size": "Tamanho",
+  "file.action": "Ação",
+  "action.added": "adicionado",
+  "action.modified": "modificado",
+  "action.deleted": "eliminado",
+  "action.renamed": "renomeado",
+  "filter.placeholder": "Filtrar por mensagem de commit…",
+  "status.loading": "A carregar histórico de commits…",
+  "title.loading": "gitlog - %{repo} - %{branch} - a carregar…",
+  "title.done": "gitlog - %{repo} - %{branch} - %{count} commits",
+  "commit.committer": "Committer: %{name}",
+  "commit.author": "Autor: %{name}",
+  "commit.hash": "Commit: %{hash}"
+}

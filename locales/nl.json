@@ -1,0 +1,22 @@
+{
+  "col.hash": "Hash",
+  "col.message": "Bericht",
+  "col.committer": "Committer",
+  "col.date": "Datum",
+  "file.name": "Bestand",
+  "file.added": "Toegevoegd",
+  "file.deleted": "Verwijderd",
+  "file.size": "Grootte",
+  "file.action": "Actie",
+  "action.added": "toegevoegd",
+  "action.modified": "gewijzigd",
+  "action.deleted": "verwijderd",
+  "action.renamed": "hernoemd",
+  "filter.placeholder": "Filteren op commitbericht…",
+  "status.loading": "Commitgeschiedenis laden…",
+  "title.loading": "gitlog - %{repo} - %{branch} - wordt geladen…",
+  "title.done": "gitlog - %{repo} - %{branch} - %{count} commits",
+  "commit.committer": "Committer: %{name}",
+  "commit.author": "Auteur: %{name}",
+  "commit.hash": "Commit: %{hash}"
+}
