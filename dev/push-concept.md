@@ -8,5 +8,5 @@
 - checkboxes for force and force-with-lease (only one can be active at a time)
 - checkbox to include tags
 - checkbox to set upstream/remote branch
-- 'Cancel' and 'Commit' buttons at the bottom
+- 'Cancel' and 'Push' buttons at the bottom
 - on error: shows a dialog containing the error message and a close button, user should be able to select/copy this message (e.g. to google it) 
