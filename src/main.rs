@@ -244,10 +244,9 @@ impl Ui {
 }
 
 fn main() -> ExitCode {
-    let Some(folder) = env::args().nth(1) else {
-        eprintln!("usage: gitlog <project-folder>");
-        return ExitCode::from(2);
-    };
+    // no argument: commit in the current folder (e.g. launched from a
+    // terminal that is already inside the project)
+    let folder = env::args().nth(1).unwrap_or_else(|| ".".to_string());
     let repo = match PathBuf::from(&folder).canonicalize() {
         Ok(p) => p,
         Err(e) => {
@@ -676,10 +675,10 @@ mod i18n_resolution_tests {
         let repo = "acme";
         let branch = "main";
         let n: usize = 3;
-        assert_eq!(rust_i18n::t!("title.done", locale = "en", repo = &repo, branch = &branch, count = n), "gitlog - acme - main - 3 commits");
-        assert_eq!(rust_i18n::t!("title.done", locale = "de", repo = &repo, branch = &branch, count = n), "gitlog - acme - main - 3 Commits");
-        assert_eq!(rust_i18n::t!("title.done", locale = "it", repo = &repo, branch = &branch, count = n), "gitlog - acme - main - 3 commit");
-        assert_eq!(rust_i18n::t!("title.done", locale = "nl", repo = &repo, branch = &branch, count = n), "gitlog - acme - main - 3 commits");
+        assert_eq!(rust_i18n::t!("title.done", locale = "en", repo = &repo, branch = &branch, count = n), "git log - acme - main - 3 commits");
+        assert_eq!(rust_i18n::t!("title.done", locale = "de", repo = &repo, branch = &branch, count = n), "git log - acme - main - 3 Commits");
+        assert_eq!(rust_i18n::t!("title.done", locale = "it", repo = &repo, branch = &branch, count = n), "git log - acme - main - 3 commit");
+        assert_eq!(rust_i18n::t!("title.done", locale = "nl", repo = &repo, branch = &branch, count = n), "git log - acme - main - 3 commits");
     }
 }
 

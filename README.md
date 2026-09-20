@@ -39,8 +39,8 @@ condition. Make sure `~/.local/bin` is in your `PATH` and restart Nemo
 ## Run
 
 ```sh
-target/release/gitlog /path/to/project        # commit history
-target/release/gitcommit [/path/to/project]   # commit window (default: current folder)
+target/release/gitlog [/path/to/project]      # commit history (default: current folder)
+target/release/gitcommit [/path/to/project]   # commit window
 ```
 
 ## Features
