@@ -8,8 +8,33 @@ A GTK4 tool to inspect the git history of a project.
 ./build.sh
 ```
 
-Installs `libgtk-4-dev` and the Rust toolchain if missing (needs sudo),
-then runs `cargo build --release`.
+Installs the Rust toolchain if missing, then runs `cargo build --release`.
+Fails with a hint if the GTK4 development libraries (`libgtk-4-dev`)
+are not installed; add `--install-system-deps` to install them via apt
+(needs sudo):
+
+```sh
+./build.sh --install-system-deps
+```
+
+## Install (binaries + Nemo context menu)
+
+```sh
+./install.sh
+```
+
+Builds the project (arguments are passed to `build.sh`, e.g.
+`./install.sh --install-system-deps`), then installs:
+
+- `gitlog` / `gitcommit` → `~/.local/bin`
+- `gitlog.nemo_action` / `gitcommit.nemo_action` / `check-git-dir.sh`
+  → `~/.local/share/nemo/actions`
+
+The Nemo context menu actions (right-click a directory) run `gitlog %F`
+and `gitcommit %F`. They only show up on directories that contain a
+`.git` entry, checked by `check-git-dir.sh` via the actions' `exec`
+condition. Make sure `~/.local/bin` is in your `PATH` and restart Nemo
+(e.g. log out/in) after installing.
 
 ## Run
 

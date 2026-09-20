@@ -1,0 +1,32 @@
+[Nemo Action]
+
+# Whether this action is active.  For troubleshooting.
+# Optional - if this field is omitted, the action will be active
+Active=true
+
+# The name to show in the menu, locale supported with standard desktop spec.
+# **** REQUIRED ****
+Name=Git Commit
+
+# Tool tip, locale supported (Appears in the status bar)
+Comment=Öffnet das Git Commit-Fenster für den Ordner
+
+# What to run.  Enclose in < > to run an executable that resides in the actions folder.
+# **** REQUIRED ****
+Exec=gitcommit %F
+
+# Icon name to use in the menu - must be a theme icon name
+Icon-Name=mintgit
+
+# What type selection: [s]ingle, [m]ultiple, any, notnone, none (background click), or
+# a number representing how many files must be selected to display.
+# ****** REQUIRED *******
+Selection=notnone
+
+# What extensions to display on - this is an array, end with a semicolon
+Extensions=dir;
+
+# Only show the action if the selected directory is a git repository
+# (contains a .git folder). The script is installed next to this action
+# by install.sh; "< ... >" resolves relative to the actions folder.
+Conditions=exec <check-git-dir.sh "%F">

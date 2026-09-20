@@ -1,14 +1,40 @@
 #!/usr/bin/env bash
 # Builds gitlog. Works in the project container and on the host
-# (both Debian trixie/sid). Requires sudo for the first system-dep install.
+# (both Debian trixie/sid).
+#
+# System dependencies (GTK4 dev libraries) are NOT installed by default;
+# pass --install-system-deps to install them via sudo apt-get.
 set -euo pipefail
 cd "$(dirname "$0")"
 
+INSTALL_SYSTEM_DEPS=false
+for arg in "$@"; do
+    case "$arg" in
+        --install-system-deps)
+            INSTALL_SYSTEM_DEPS=true
+            ;;
+        *)
+            echo "Unknown argument: $arg" >&2
+            echo "Usage: ./build.sh [--install-system-deps]" >&2
+            exit 1
+            ;;
+    esac
+done
+
 # --- system dependencies -----------------------------------------------------
-if ! pkg-config --exists gtk4 glib-2.0; then
-    echo "Installing GTK4 development libraries..."
-    sudo apt-get update
-    sudo apt-get install -y pkg-config libgtk-4-dev
+if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists gtk4 glib-2.0; then
+    if [ "$INSTALL_SYSTEM_DEPS" = true ]; then
+        echo "Installing GTK4 development libraries..."
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libgtk-4-dev
+    else
+        echo "Missing system dependencies: GTK4 development libraries" >&2
+        echo "(pkg-config, gtk4, glib-2.0)." >&2
+        echo >&2
+        echo "Re-run with --install-system-deps to install them via apt (needs sudo):" >&2
+        echo "  ./build.sh --install-system-deps" >&2
+        exit 1
+    fi
 fi
 
 # --- rust toolchain ------------------------------------------------------------
