@@ -27,5 +27,20 @@
   "status.new": "neu",
   "error.empty_message": "Bitte gib eine Commit-Nachricht ein.",
   "error.nothing_staged": "Nichts zu committen (keine Dateien sind markiert und gestaged).",
-  "error.commit_failed": "Commit fehlgeschlagen: %{error}"
+  "error.commit_failed": "Commit fehlgeschlagen: %{error}",
+  "push.title": "git push - %{branch}",
+  "push.all_branches": "Alle Branches pushen",
+  "push.remote": "Remote",
+  "push.all_remotes": "Alle Remotes",
+  "push.local_branch": "Lokaler Branch",
+  "push.remote_branch": "Remote-Branch",
+  "push.force": "Force",
+  "push.force_with_lease": "Force with lease",
+  "push.tags": "Tags mitschicken",
+  "push.set_upstream": "Upstream-Branch festlegen",
+  "push.cancel": "Abbrechen",
+  "push.push": "Pushen",
+  "error.push_failed": "Push fehlgeschlagen: %{error}",
+  "error.no_remotes": "Es sind keine Remotes konfiguriert.",
+  "error.close": "Schließen"
 }

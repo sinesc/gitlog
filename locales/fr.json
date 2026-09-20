@@ -27,5 +27,20 @@
   "status.new": "nouveau",
   "error.empty_message": "Veuillez saisir un message de commit.",
   "error.nothing_staged": "Rien à commettre (aucun fichier n'est coché et indexé).",
-  "error.commit_failed": "Échec du commit : %{error}"
+  "error.commit_failed": "Échec du commit : %{error}",
+  "push.title": "git push - %{branch}",
+  "push.all_branches": "Pusher toutes les branches",
+  "push.remote": "Remote",
+  "push.all_remotes": "Tous les remotes",
+  "push.local_branch": "Branche locale",
+  "push.remote_branch": "Branche distante",
+  "push.force": "Force",
+  "push.force_with_lease": "Force with lease",
+  "push.tags": "Inclure les tags",
+  "push.set_upstream": "Définir la branche amont",
+  "push.cancel": "Annuler",
+  "push.push": "Pusher",
+  "error.push_failed": "Push échoué : %{error}",
+  "error.no_remotes": "Aucun remote n'est configuré.",
+  "error.close": "Fermer"
 }

@@ -27,5 +27,20 @@
   "status.new": "nuovo",
   "error.empty_message": "Inserisci un messaggio di commit.",
   "error.nothing_staged": "Niente da committare (nessun file è spuntato e indexato).",
-  "error.commit_failed": "Commit non riuscito: %{error}"
+  "error.commit_failed": "Commit non riuscito: %{error}",
+  "push.title": "git push - %{branch}",
+  "push.all_branches": "Push di tutti i rami",
+  "push.remote": "Remoto",
+  "push.all_remotes": "Tutti i remoti",
+  "push.local_branch": "Ramo locale",
+  "push.remote_branch": "Ramo remoto",
+  "push.force": "Force",
+  "push.force_with_lease": "Force with lease",
+  "push.tags": "Includi i tag",
+  "push.set_upstream": "Imposta ramo upstream",
+  "push.cancel": "Annulla",
+  "push.push": "Push",
+  "error.push_failed": "Push non riuscito: %{error}",
+  "error.no_remotes": "Nessun remoto configurato.",
+  "error.close": "Chiudi"
 }

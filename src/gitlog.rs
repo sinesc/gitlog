@@ -61,18 +61,20 @@ pub fn is_repo(repo: &Path) -> bool {
 }
 
 /// "branch name" or "(detached @ short-hash)"
+/// Name of the checked-out branch ("" in detached HEAD).
+pub fn current_branch(repo: &Path) -> String {
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "branch", "--show-current"])
+        .output()
+        .ok()
+        .map(|o| o.stdout)
+        .unwrap_or_default();
+    String::from_utf8(output).unwrap_or_default().trim().to_string()
+}
+
+/// "branch name" or "(detached @ short-hash)"
 pub fn head_info(repo: &Path) -> String {
-    let branch = std::str::from_utf8(
-        &Command::new("git")
-            .args(["-C", &repo.to_string_lossy(), "branch", "--show-current"])
-            .output()
-            .ok()
-            .map(|o| o.stdout)
-            .unwrap_or_default(),
-    )
-    .unwrap_or("")
-    .trim()
-    .to_string();
+    let branch = current_branch(repo);
     if branch.is_empty() {
         let sha = std::str::from_utf8(
             &Command::new("git")
@@ -89,6 +91,22 @@ pub fn head_info(repo: &Path) -> String {
     } else {
         branch
     }
+}
+
+/// Names of the configured remotes, in `git remote` order.
+pub fn remotes(repo: &Path) -> Vec<String> {
+    let Ok(output) = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "remote"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 /// Map of full commit hash -> branch names (local and remote) whose tip
@@ -795,5 +813,83 @@ mod tests {
         assert!(dir.join("b2.txt").exists());
         assert!(untracked_files(&dir).contains(&"b2.txt".to_string()));
         assert_eq!(head_message(&dir), Some("amended message".to_string()));
+    }
+
+    /// `git -C repo rev-parse --verify <what>` (panics on failure).
+    fn rev(repo: &Path, what: &str) -> String {
+        let out = Command::new("git")
+            .args(["-C", &repo.to_string_lossy(), "rev-parse", "--verify", what])
+            .output()
+            .expect("failed to run git");
+        assert!(
+            out.status.success(),
+            "git rev-parse {what} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn remotes_and_push() {
+        let dir = fixture_repo("push");
+        // two bare "remote" repositories
+        let origin = std::env::temp_dir()
+            .join(format!("gitlog-test-push-origin-{}", std::process::id()));
+        let backup = std::env::temp_dir()
+            .join(format!("gitlog-test-push-backup-{}", std::process::id()));
+        for bare in [&origin, &backup] {
+            let _ = std::fs::remove_dir_all(bare);
+            let out = Command::new("git")
+                .args(["init", "--bare", "-q", &bare.to_string_lossy()])
+                .output()
+                .expect("failed to run git");
+            assert!(
+                out.status.success(),
+                "git init --bare failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        git(&dir, &["remote", "add", "origin", &origin.to_string_lossy()]);
+        assert_eq!(remotes(&dir), vec!["origin".to_string()]);
+
+        // normal push
+        run_git(&dir, &["push", "origin", "main"]).unwrap();
+        assert_eq!(rev(&origin, "refs/heads/main"), rev(&dir, "HEAD"));
+
+        // a remote that is ahead rejects a non-force push, force succeeds:
+        // add a commit, push it, then reset the branch back
+        write(&dir, "c.txt", "c\n");
+        git(&dir, &["add", "c.txt"]);
+        git(&dir, &["commit", "-qm", "fourth commit"]);
+        run_git(&dir, &["push", "origin", "main"]).unwrap();
+        git(&dir, &["reset", "--hard", "HEAD~1"]);
+        assert!(run_git(&dir, &["push", "origin", "main"]).is_err());
+        run_git(&dir, &["push", "--force", "origin", "main"]).unwrap();
+        let head = rev(&dir, "HEAD");
+        assert_eq!(rev(&origin, "refs/heads/main"), head);
+
+        // tags are pushed with --tags
+        git(&dir, &["tag", "v1"]);
+        run_git(&dir, &["push", "--tags", "origin"]).unwrap();
+        assert_eq!(rev(&origin, "refs/tags/v1"), head);
+
+        // a second remote is listed too (`git remote` is alphabetical)
+        git(&dir, &["remote", "add", "backup", &backup.to_string_lossy()]);
+        assert_eq!(
+            remotes(&dir),
+            vec!["backup".to_string(), "origin".to_string()]
+        );
+
+        // --set-upstream records the tracking branch
+        run_git(&dir, &["push", "--set-upstream", "origin", "main"]).unwrap();
+        let out = Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "config", "branch.main.remote"])
+            .output()
+            .expect("failed to run git");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "origin"
+        );
     }
 }

@@ -59,3 +59,4 @@ echo
 echo "Done. Run with:"
 echo "  target/release/gitlog <path-to-git-repo>     # commit history"
 echo "  target/release/gitcommit [path-to-git-repo]  # commit window"
+echo "  target/release/gitpush [path-to-git-repo]    # push window"

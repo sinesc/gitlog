@@ -27,5 +27,20 @@
   "status.new": "nieuw",
   "error.empty_message": "Voer een commitbericht in.",
   "error.nothing_staged": "Niets om te committen (geen bestanden zijn gemarkeerd en geïndexeerd).",
-  "error.commit_failed": "Commit mislukt: %{error}"
+  "error.commit_failed": "Commit mislukt: %{error}",
+  "push.title": "git push - %{branch}",
+  "push.all_branches": "Alle branches pushen",
+  "push.remote": "Remote",
+  "push.all_remotes": "Alle remotes",
+  "push.local_branch": "Lokale branch",
+  "push.remote_branch": "Remote-branch",
+  "push.force": "Force",
+  "push.force_with_lease": "Force with lease",
+  "push.tags": "Tags mee-pushen",
+  "push.set_upstream": "Upstream-branch instellen",
+  "push.cancel": "Annuleren",
+  "push.push": "Pushen",
+  "error.push_failed": "Pushen mislukt: %{error}",
+  "error.no_remotes": "Er zijn geen remotes geconfigureerd.",
+  "error.close": "Sluiten"
 }

@@ -26,12 +26,13 @@ are not installed; add `--install-system-deps` to install them via apt
 Builds the project (arguments are passed to `build.sh`, e.g.
 `./install.sh --install-system-deps`), then installs:
 
-- `gitlog` / `gitcommit` → `~/.local/bin`
-- `gitlog.nemo_action` / `gitcommit.nemo_action` / `check-git-dir.sh`
-  → `~/.local/share/nemo/actions`
+- `gitlog` / `gitcommit` / `gitpush` → `~/.local/bin`
+- `gitlog.nemo_action` / `gitcommit.nemo_action` /
+  `gitpush.nemo_action` / `check-git-dir.sh` →
+  `~/.local/share/nemo/actions`
 
-The Nemo context menu actions (right-click a directory) run `gitlog %F`
-and `gitcommit %F`. They only show up on directories that contain a
+The Nemo context menu actions (right-click a directory) run `gitlog %F`,
+`gitcommit %F` and `gitpush %F`. They only show up on directories that contain a
 `.git` entry, checked by `check-git-dir.sh` via the actions' `exec`
 condition. Make sure `~/.local/bin` is in your `PATH` and restart Nemo
 (e.g. log out/in) after installing.
@@ -41,6 +42,7 @@ condition. Make sure `~/.local/bin` is in your `PATH` and restart Nemo
 ```sh
 target/release/gitlog [/path/to/project]      # commit history (default: current folder)
 target/release/gitcommit [/path/to/project]   # commit window
+target/release/gitpush [/path/to/project]     # push window
 ```
 
 ## Features
@@ -61,12 +63,17 @@ target/release/gitcommit [/path/to/project]   # commit window
 
 - Rust, `gtk4` (4.x) + `glib` crates; plain `git` is used via CLI
   (no libgit2 dependency).
-- Two binaries share a lib target (`src/lib.rs`):
+- Three binaries share a lib target (`src/lib.rs`):
   - `gitlog` (`src/main.rs`): the history viewer.
   - `gitcommit` (`src/bin/gitcommit.rs`): the commit window (see
     `dev/commit-concept.md`) with a stageable file list and an "amend last
     commit" mode; unchecking a file while amending removes it from the
     amended commit and leaves it as an unstaged file.
+  - `gitpush` (`src/bin/gitpush.rs`): the push window (see
+    `dev/push-concept.md`): remote dropdown (first item: all remotes),
+    local/remote branch names, and force / force-with-lease / tags /
+    set-upstream / all-branches options; pushes run in a background thread
+    and errors are shown in a dialog with a selectable text view.
 - File sizes are fetched lazily per selected commit via
   `git ls-tree -r -l` and cached.
 - Unit-tested git parsers: `cargo test`.

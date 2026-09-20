@@ -27,5 +27,20 @@
   "status.new": "nuevo",
   "error.empty_message": "Introduce un mensaje de commit.",
   "error.nothing_staged": "Nada que commitear (no hay archivos marcados e indexados).",
-  "error.commit_failed": "Error al commitear: %{error}"
+  "error.commit_failed": "Error al commitear: %{error}",
+  "push.title": "git push - %{branch}",
+  "push.all_branches": "Push de todas las ramas",
+  "push.remote": "Remoto",
+  "push.all_remotes": "Todos los remotos",
+  "push.local_branch": "Rama local",
+  "push.remote_branch": "Rama remota",
+  "push.force": "Force",
+  "push.force_with_lease": "Force with lease",
+  "push.tags": "Incluir etiquetas",
+  "push.set_upstream": "Establecer rama upstream",
+  "push.cancel": "Cancelar",
+  "push.push": "Push",
+  "error.push_failed": "El push falló: %{error}",
+  "error.no_remotes": "No hay remotos configurados.",
+  "error.close": "Cerrar"
 }
