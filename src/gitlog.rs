@@ -1,6 +1,6 @@
 //! Git data access: parses `git log` output and queries file sizes.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -140,6 +140,289 @@ pub fn file_sizes(repo: &Path, hash: &str) -> HashMap<String, u64> {
         }
     }
     map
+}
+
+/// A file entry for the commit UI: a working-tree change against `HEAD`
+/// (or, in amend mode, a file of the previous commit).
+#[derive(Clone, Debug)]
+pub struct WorkFile {
+    /// Path used for git operations (the new path for renames)
+    pub path: String,
+    /// Display name; renames are shown as "old => new"
+    pub display_name: String,
+    pub action: Action,
+    /// None for binary files or files with no line-count diff (untracked)
+    pub added: Option<i64>,
+    pub deleted: Option<i64>,
+    /// Already in the index (used to pre-check the stage checkbox)
+    pub staged: bool,
+    /// File exists at `HEAD` (false for untracked files)
+    pub in_head: bool,
+}
+
+/// numstat shows renames as "old => new"; the index/tree only know the new path.
+fn numstat_path(p: &str) -> &str {
+    p.rsplit("=>").next().unwrap_or(p).trim()
+}
+
+fn is_count(t: &str) -> bool {
+    !t.is_empty() && t.chars().all(|c| c.is_ascii_digit() || c == '-')
+}
+
+/// `git diff --name-status [args]`; returns (path, action, display name).
+fn name_status(repo: &Path, args: &[&str]) -> Vec<(String, Action, String)> {
+    let Ok(output) = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "-c", "core.quotepath=false", "diff", "--name-status"])
+        .args(args)
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        // "<X>[<score>]\t<file>" or "<R/C><score>\t<old>\t<new>"
+        let mut f = line.splitn(3, '\t');
+        let (Some(code), Some(first), new) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
+        let letter = code.chars().next().unwrap();
+        let action = match letter {
+            'A' | 'C' => Action::Added,
+            'D' => Action::Deleted,
+            'R' => Action::Renamed,
+            _ => Action::Modified,
+        };
+        let (path, display) = match new {
+            Some(new) => (new.to_string(), format!("{first} => {new}")),
+            None => (first.to_string(), first.to_string()),
+        };
+        out.push((path, action, display));
+    }
+    out
+}
+
+/// `git diff --numstat [args]`; returns path -> (added, deleted).
+fn numstat_map(repo: &Path, args: &[&str]) -> HashMap<String, (Option<i64>, Option<i64>)> {
+    let Ok(output) = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "-c", "core.quotepath=false", "diff", "--numstat"])
+        .args(args)
+        .output()
+    else {
+        return HashMap::new();
+    };
+    let count = |s: &str| if s == "-" { None } else { s.parse().ok() };
+    let mut map = HashMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut f = line.splitn(3, '\t');
+        let (Some(a), Some(d), Some(p)) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
+        if is_count(a) && is_count(d) {
+            map.insert(numstat_path(p).to_string(), (count(a), count(d)));
+        }
+    }
+    map
+}
+
+/// Untracked files (from `git status --porcelain=v1`).
+fn untracked_files(repo: &Path) -> Vec<String> {
+    let Ok(output) = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "-c", "core.quotepath=false", "status", "--porcelain=v1"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix("?? ").map(|p| p.to_string()))
+        .collect()
+}
+
+/// Files that differ between the working tree and `HEAD`, plus untracked
+/// files. Renames are shown as "old => new" and carry the new path.
+pub fn worktree_changes(repo: &Path) -> Vec<WorkFile> {
+    let counts = numstat_map(repo, &["-M", "HEAD"]);
+    let staged: HashSet<String> = name_status(repo, &["-M", "--cached", "HEAD"])
+        .into_iter()
+        .map(|(p, _, _)| p)
+        .collect();
+    let mut files: Vec<WorkFile> = name_status(repo, &["-M", "HEAD"])
+        .into_iter()
+        .map(|(path, action, display_name)| {
+            let (added, deleted) = counts.get(&path).copied().unwrap_or((None, None));
+            WorkFile {
+                path: path.clone(),
+                display_name,
+                action,
+                added,
+                deleted,
+                staged: staged.contains(&path),
+                in_head: true,
+            }
+        })
+        .collect();
+    for path in untracked_files(repo) {
+        files.push(WorkFile {
+            display_name: path.clone(),
+            path,
+            action: Action::Added,
+            added: None,
+            deleted: None,
+            staged: false,
+            in_head: false,
+        });
+    }
+    files
+}
+
+/// True if the repository has at least one commit.
+pub fn has_head(repo: &Path) -> bool {
+    Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "rev-parse", "--verify", "-q", "HEAD"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Files of the previous commit (`None` if there is no commit yet). All are
+/// in the index, so `staged` and `in_head` are set.
+pub fn head_files(repo: &Path) -> Option<Vec<WorkFile>> {
+    if !has_head(repo) {
+        return None;
+    }
+    // git shows only one diff format at a time, and `show` (instead of
+    // `diff HEAD^ HEAD`) also works for the root commit
+    let mut output = String::new();
+    for format in ["--name-status", "--numstat"] {
+        if let Ok(out) = Command::new("git")
+            .args([
+                "-C", &repo.to_string_lossy(), "-c", "core.quotepath=false",
+                "show", "-M", format, "--format=", "HEAD",
+            ])
+            .output()
+        {
+            output.push_str(&String::from_utf8_lossy(&out.stdout));
+        }
+    }
+    let mut files: Vec<WorkFile> = Vec::new();
+    let mut counts: HashMap<String, (Option<i64>, Option<i64>)> = HashMap::new();
+    for line in output.lines() {
+        let mut f = line.splitn(3, '\t');
+        let (Some(a), Some(b), rest) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
+        if is_count(a) && is_count(b) {
+            // numstat: "<added>\t<deleted>\t<path>"
+            if let Some(path) = rest {
+                counts.insert(
+                    numstat_path(path).to_string(),
+                    (a.parse().ok(), b.parse().ok()),
+                );
+            }
+        } else if matches!(a.chars().next(), Some('A' | 'M' | 'D' | 'R' | 'C' | 'T')) {
+            // name-status: "<X>[<score>]\t<file>" or "<R/C><score>\t<old>\t<new>"
+            let action = match a.chars().next() {
+                Some('A') | Some('C') => Action::Added,
+                Some('D') => Action::Deleted,
+                Some('R') => Action::Renamed,
+                _ => Action::Modified,
+            };
+            let (path, display_name) = match rest {
+                Some(new) => (new.to_string(), format!("{b} => {new}")),
+                None => (b.to_string(), b.to_string()),
+            };
+            files.push(WorkFile {
+                path: path.clone(),
+                display_name,
+                action,
+                added: None,
+                deleted: None,
+                staged: true,
+                in_head: true,
+            });
+        }
+    }
+    for f in &mut files {
+        if let Some((added, deleted)) = counts.get(&f.path) {
+            f.added = *added;
+            f.deleted = *deleted;
+        }
+    }
+    Some(files)
+}
+
+/// Full message of the previous commit (trailing newlines trimmed).
+pub fn head_message(repo: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "log", "-1", "--format=%B", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let message = String::from_utf8_lossy(&output.stdout);
+    Some(message.trim_end_matches('\n').to_string())
+}
+
+/// Runs a git command; returns the trimmed stderr on failure.
+pub fn run_git(repo: &Path, args: &[&str]) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy()])
+        .args(args)
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if msg.is_empty() { "git command failed".into() } else { msg })
+    }
+}
+
+/// Stage the working-tree state of one path.
+pub fn stage_path(repo: &Path, path: &str) -> Result<(), String> {
+    run_git(repo, &["add", "-A", "--", path])
+}
+
+/// Remove one path from the index, keeping the working-tree file.
+pub fn unstage_path(repo: &Path, path: &str) -> Result<(), String> {
+    run_git(repo, &["restore", "--staged", "--", path])
+}
+
+/// Remove one path from the index only (the working-tree file stays) -
+/// used to drop a file from an amended commit.
+pub fn rm_cached_path(repo: &Path, path: &str) -> Result<(), String> {
+    run_git(repo, &["rm", "-q", "-r", "--cached", "--", path])
+}
+
+/// True when the index matches `HEAD`, i.e. nothing is staged to commit.
+pub fn index_matches_head(repo: &Path) -> bool {
+    Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "diff", "--cached", "--quiet", "HEAD"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// `git commit [-m message] [--amend]`; returns the trimmed stderr on failure.
+pub fn do_commit(repo: &Path, message: &str, amend: bool) -> Result<(), String> {
+    let mut args: Vec<String> = vec!["commit".into()];
+    if amend {
+        args.push("--amend".into());
+    }
+    args.push("-m".into());
+    args.push(message.to_string());
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy()])
+        .args(&args)
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if msg.is_empty() { "git command failed".into() } else { msg })
+    }
 }
 
 /// Streams commits (newest first) into `on_commit`.
@@ -339,8 +622,9 @@ mod tests {
     }
 
     /// Builds a repo with add / modify / delete / rename commits.
-    fn fixture_repo() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("gitlog-test-{}", std::process::id()));
+    /// `tag` keeps the temp dirs of tests running in parallel apart.
+    fn fixture_repo(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gitlog-test-{}-{}", std::process::id(), tag));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         git(&dir, &["init", "-q", "-b", "main"]);
@@ -366,7 +650,7 @@ mod tests {
 
     #[test]
     fn parses_commits() {
-        let dir = fixture_repo();
+        let dir = fixture_repo("parse");
         let mut commits: Vec<Commit> = Vec::new();
         let cancel = AtomicBool::new(false);
         load_commits(&dir, &cancel, |c| {
@@ -444,5 +728,72 @@ mod tests {
         let tips = branch_tips(&dir);
         assert_eq!(tips.get(&head), Some(&vec!["main".to_string(), "origin/main".to_string()]));
         assert_eq!(tips.get(&second), Some(&vec!["github/main".to_string()]));
+    }
+
+    #[test]
+    fn worktree_changes_and_head() {
+        let dir = fixture_repo("worktree");
+        // HEAD (rename commit): a.txt (3 lines), b2.txt
+        // working-copy changes: a.txt +1 line (staged), b2.txt deleted
+        // (unstaged), new.txt untracked
+        write(&dir, "a.txt", "line1\nline2\nline3\nline4\n");
+        git(&dir, &["add", "-A", "--", "a.txt"]);
+        std::fs::remove_file(dir.join("b2.txt")).unwrap();
+        write(&dir, "new.txt", "fresh\n");
+
+        let files = worktree_changes(&dir);
+        let by_name = |name: &str| files.iter().find(|f| f.path == name).unwrap_or_else(|| {
+            panic!("{name} not in worktree_changes: {files:?}")
+        });
+        assert_eq!(files.len(), 3);
+        let a = by_name("a.txt");
+        assert_eq!(a.action, Action::Modified);
+        assert_eq!(a.added, Some(1));
+        assert_eq!(a.deleted, Some(0));
+        assert!(a.staged);
+        assert!(a.in_head);
+        let b = by_name("b2.txt");
+        assert_eq!(b.action, Action::Deleted);
+        assert!(!b.staged);
+        assert!(b.in_head);
+        let n = by_name("new.txt");
+        assert_eq!(n.action, Action::Added);
+        assert_eq!((n.added, n.deleted), (None, None)); // no diff for untracked
+        assert!(!n.staged);
+        assert!(!n.in_head);
+
+        // previous commit: the rename, shown as "old => new" with the new path
+        let head = head_files(&dir).expect("head_files");
+        assert_eq!(head.len(), 1);
+        assert_eq!(head[0].path, "b2.txt");
+        assert_eq!(head[0].display_name, "b.txt => b2.txt");
+        assert_eq!(head[0].action, Action::Renamed);
+        assert!(head[0].staged);
+        assert!(head[0].in_head);
+
+        assert_eq!(head_message(&dir), Some("third commit: rename b -> b2".to_string()));
+        assert!(has_head(&dir));
+    }
+
+    #[test]
+    fn amend_commit_flow() {
+        let dir = fixture_repo("amend");
+        // amend the rename commit: keep a.txt (modified in the work tree),
+        // drop b2.txt -> it must leave the commit and stay in the work tree
+        write(&dir, "a.txt", "line1\nline2\nline3\nline4\n");
+        rm_cached_path(&dir, "b2.txt").unwrap();
+        stage_path(&dir, "a.txt").unwrap();
+        do_commit(&dir, "amended message", true).unwrap();
+
+        // the amended commit no longer contains b2.txt
+        let head = head_files(&dir).expect("head_files after amend");
+        assert!(!head.iter().any(|f| f.path == "b2.txt"));
+        let a = head.iter().find(|f| f.path == "a.txt").expect("a.txt in amended commit");
+        assert_eq!(a.action, Action::Modified);
+        assert_eq!(a.added, Some(1));
+        // b2.txt stays in the work tree as an untracked file
+        assert!(dir.join("b2.txt").exists());
+        assert!(untracked_files(&dir).contains(&"b2.txt".to_string()));
+        assert_eq!(head_message(&dir), Some("amended message".to_string()));
     }
 }

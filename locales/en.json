@@ -18,5 +18,14 @@
   "title.done": "gitlog - %{repo} - %{branch} - %{count} commits",
   "commit.committer": "Committer: %{name}",
   "commit.author": "Author: %{name}",
-  "commit.hash": "Commit: %{hash}"
+  "commit.hash": "Commit: %{hash}",
+  "commit.title": "git commit - %{branch}",
+  "commit.amend": "Amend last commit",
+  "commit.cancel": "Cancel",
+  "commit.commit": "Commit",
+  "col.status": "Status",
+  "status.new": "new",
+  "error.empty_message": "Please enter a commit message.",
+  "error.nothing_staged": "Nothing to commit (no files are checked and staged).",
+  "error.commit_failed": "Commit failed: %{error}"
 }

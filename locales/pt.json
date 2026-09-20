@@ -18,5 +18,14 @@
   "title.done": "gitlog - %{repo} - %{branch} - %{count} commits",
   "commit.committer": "Committer: %{name}",
   "commit.author": "Autor: %{name}",
-  "commit.hash": "Commit: %{hash}"
+  "commit.hash": "Commit: %{hash}",
+  "commit.title": "git commit - %{branch}",
+  "commit.amend": "Corrigir o último commit",
+  "commit.cancel": "Cancelar",
+  "commit.commit": "Commit",
+  "col.status": "Estado",
+  "status.new": "novo",
+  "error.empty_message": "Introduza uma mensagem de commit.",
+  "error.nothing_staged": "Nada para commitar (nenhum ficheiro está marcado e indexado).",
+  "error.commit_failed": "Falha ao commitar: %{error}"
 }

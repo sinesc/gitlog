@@ -18,5 +18,14 @@
   "title.done": "gitlog - %{repo} - %{branch} - %{count} commits",
   "commit.committer": "Committer: %{name}",
   "commit.author": "Auteur: %{name}",
-  "commit.hash": "Commit: %{hash}"
+  "commit.hash": "Commit: %{hash}",
+  "commit.title": "git commit - %{branch}",
+  "commit.amend": "Laatste commit aanpassen",
+  "commit.cancel": "Annuleren",
+  "commit.commit": "Commit",
+  "col.status": "Status",
+  "status.new": "nieuw",
+  "error.empty_message": "Voer een commitbericht in.",
+  "error.nothing_staged": "Niets om te committen (geen bestanden zijn gemarkeerd en geïndexeerd).",
+  "error.commit_failed": "Commit mislukt: %{error}"
 }

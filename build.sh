@@ -31,4 +31,5 @@ cargo build --release
 
 echo
 echo "Done. Run with:"
-echo "  target/release/gitlog <path-to-git-repo>"
+echo "  target/release/gitlog <path-to-git-repo>     # commit history"
+echo "  target/release/gitcommit [path-to-git-repo]  # commit window"

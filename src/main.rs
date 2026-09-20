@@ -13,8 +13,8 @@ use rust_i18n::t;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
-mod gitlog;
-mod i18n;
+use gitlog::gitlog as gl;
+use gitlog::i18n;
 
 const LOG_HASH: u32 = 0;
 const LOG_SUBJECT: u32 = 1;
@@ -77,12 +77,12 @@ fn numstat(n: Option<i64>) -> String {
 }
 
 /// Localized label for a file change action, looked up in the locale files.
-fn action_label(action: gitlog::Action) -> String {
+fn action_label(action: gl::Action) -> String {
     match action {
-        gitlog::Action::Added => t!("action.added").into_owned(),
-        gitlog::Action::Modified => t!("action.modified").into_owned(),
-        gitlog::Action::Deleted => t!("action.deleted").into_owned(),
-        gitlog::Action::Renamed => t!("action.renamed").into_owned(),
+        gl::Action::Added => t!("action.added").into_owned(),
+        gl::Action::Modified => t!("action.modified").into_owned(),
+        gl::Action::Deleted => t!("action.deleted").into_owned(),
+        gl::Action::Renamed => t!("action.renamed").into_owned(),
     }
 }
 
@@ -116,12 +116,12 @@ fn make_expanding(tree: &gtk::TreeView, col: u32, base_width: i32) {
 
 /// Messages from background threads, drained on the main loop.
 enum Msg {
-    Commit(gitlog::Commit),
+    Commit(gl::Commit),
     Sizes { hash: String, map: HashMap<String, u64> },
 }
 
 struct Ui {
-    commits: Arc<Mutex<Vec<gitlog::Commit>>>,
+    commits: Arc<Mutex<Vec<gl::Commit>>>,
     sizes: Arc<Mutex<SizeCache>>,
     selected_hash: Arc<Mutex<Option<String>>>,
     log_store: gtk::ListStore,
@@ -136,7 +136,7 @@ struct Ui {
 }
 
 impl Ui {
-    fn insert_commit(&self, commit: gitlog::Commit) {
+    fn insert_commit(&self, commit: gl::Commit) {
         let idx = self.commits.lock().unwrap().len() as i64;
         let iter = self.log_store.append();
         // mark commits whose committer differs from the author (bot, amend…)
@@ -255,7 +255,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if !gitlog::is_repo(&repo) {
+    if !gl::is_repo(&repo) {
         eprintln!("gitlog: {folder} is not a git repository");
         return ExitCode::FAILURE;
     }
@@ -336,7 +336,7 @@ fn main() -> ExitCode {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let branch = gitlog::head_info(&repo);
+        let branch = gl::head_info(&repo);
         let title = t!("title.loading", repo = &repo_name, branch = &branch);
         let window = gtk::Window::builder()
             .title(title)
@@ -573,7 +573,7 @@ fn main() -> ExitCode {
                 let repo = ui.repo.clone();
                 let tx = size_tx.clone();
                 std::thread::spawn(move || {
-                    let map = gitlog::file_sizes(&repo, &hash);
+                    let map = gl::file_sizes(&repo, &hash);
                     let _ = tx.send(Msg::Sizes { hash, map });
                 });
             });
@@ -637,7 +637,7 @@ fn main() -> ExitCode {
         {
             let repo = repo.clone();
             std::thread::spawn(move || {
-                gitlog::load_commits(
+                gl::load_commits(
                     &repo,
                     &cancel,
                     move |commit| commit_tx.send(Msg::Commit(commit)).is_ok(),
