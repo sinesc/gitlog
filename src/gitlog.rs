@@ -517,9 +517,12 @@ pub fn is_pushed(repo: &Path, hash: &str) -> bool {
 
 /// Rewrites the details of one commit (the tree is not changed).
 /// The HEAD commit is amended in place; other ancestors of the current
-/// HEAD are stopped in a non-interactive `git rebase -i`, amended there,
-/// and the rebase is continued (the replay above applies cleanly because
-/// no tree changes). Requires a clean work tree.
+/// HEAD are re-created with `git commit-tree` together with every
+/// descendant (each descendant keeps its tree, message, author and
+/// original committer — only the hashes change; a `git rebase` replay
+/// would replace the committer of the descendants with the local
+/// identity). Local branches whose tip lies inside the rewritten history
+/// move with it (tags are left alone). Requires a clean work tree.
 pub fn edit_commit_details(repo: &Path, hash: &str, d: &CommitDetails) -> Result<(), String> {
     // the rebase requires a clean work tree; keeping it uniform for the
     // plain-amend path too
@@ -592,30 +595,152 @@ pub fn edit_commit_details(repo: &Path, hash: &str, d: &CommitDetails) -> Result
         return amend();
     }
 
-    // stop a non-interactive rebase at the commit (`pick` -> `edit`);
-    // git exits 0 while stopped
-    let has_parent = Command::new("git")
-        .args(["-C", &repo.to_string_lossy(), "rev-parse", "-q", "--verify", &format!("{hash}^")])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    // git with captured stdout, like `run_git` but returning the output
+    let git_out = |args: &[&str]| -> Result<String, String> {
+        let output = Command::new("git")
+            .args(["-C", &repo.to_string_lossy()])
+            .args(args)
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| e.to_string())?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        } else {
+            let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(if msg.is_empty() { "git command failed".into() } else { msg })
+        }
+    };
+
+    // 1. the edited commit: same tree and parents, new details
+    let tree = git_out(&["rev-parse", "-q", "--verify", &format!("{full}^{{tree}}")])?;
+    let parents = git_out(&["log", "-1", "--format=%P", &full])?;
     let mut cmd = Command::new("git");
-    cmd.args(["-C", &repo.to_string_lossy()]);
-    if has_parent {
-        cmd.args(["rebase", "-i", &format!("{hash}^")]);
-    } else {
-        // root commit: no parent to base the rebase on
-        cmd.args(["rebase", "-i", "--root"]);
+    cmd.args(["-C", &repo.to_string_lossy(), "commit-tree", &tree]);
+    for p in parents.split_whitespace() {
+        cmd.arg("-p").arg(p);
     }
-    cmd.env("GIT_SEQUENCE_EDITOR", "sed -i '1s/^pick/edit/'");
+    cmd.arg("-m").arg(&d.message);
+    cmd.env("GIT_AUTHOR_NAME", &d.author);
+    cmd.env("GIT_AUTHOR_EMAIL", &d.author_email);
+    cmd.env("GIT_AUTHOR_DATE", &d.author_date);
+    cmd.env("GIT_COMMITTER_NAME", &d.committer);
+    cmd.env("GIT_COMMITTER_EMAIL", &d.committer_email);
+    cmd.env("GIT_COMMITTER_DATE", &d.committer_date);
     cmd.stderr(Stdio::piped());
     let output = cmd.output().map_err(|e| e.to_string())?;
     if !output.status.success() {
         let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if msg.is_empty() { "git rebase failed".into() } else { msg });
+        return Err(if msg.is_empty() { "git commit-tree failed".into() } else { msg });
     }
-    amend()?;
-    run_git(repo, &["rebase", "--continue"])
+    let edited = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    // git with captured, untrimmed stdout (for the commit messages, whose
+    // trailing newline is part of the data)
+    let git_out_raw = |args: &[&str]| -> Result<String, String> {
+        let output = Command::new("git")
+            .args(["-C", &repo.to_string_lossy()])
+            .args(args)
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| e.to_string())?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        } else {
+            let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(if msg.is_empty() { "git command failed".into() } else { msg })
+        }
+    };
+
+    // 2. the descendant commits of the current tip, oldest first (topo
+    // order guarantees parents come before children)
+    let list = git_out(&["rev-list", "--topo-order", "--reverse", &format!("{full}..{head}")])?;
+    let mut rewritten: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    rewritten.insert(full.clone(), edited);
+    for h in list.lines() {
+        let fields = git_out(&[
+            "log",
+            "-1",
+            "--format=%T%x00%P%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct",
+            h,
+        ])?;
+        let f: Vec<&str> = fields.split('\0').collect();
+        if f.len() != 8 {
+            return Err("unexpected git output".into());
+        }
+        let (tree, ps, an, ae, at, cn, ce, ct) = (f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]);
+        let message = git_out_raw(&["log", "-1", "--format=%B", h])?;
+        let mut cmd = Command::new("git");
+        cmd.args(["-C", &repo.to_string_lossy(), "commit-tree", tree]);
+        for p in ps.split_whitespace() {
+            // parents that were re-created point at their new hashes
+            let np = rewritten.get(p).cloned().unwrap_or_else(|| p.to_string());
+            cmd.arg("-p").arg(&np);
+        }
+        // author and committer come from the original commit (raw
+        // timestamps); `git commit-tree` would otherwise take both from
+        // the local identity; the message is piped in verbatim
+        cmd.env("GIT_AUTHOR_NAME", an);
+        cmd.env("GIT_AUTHOR_EMAIL", ae);
+        cmd.env("GIT_AUTHOR_DATE", at);
+        cmd.env("GIT_COMMITTER_NAME", cn);
+        cmd.env("GIT_COMMITTER_EMAIL", ce);
+        cmd.env("GIT_COMMITTER_DATE", ct);
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), message.as_bytes())
+            .map_err(|e| e.to_string())?;
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if msg.is_empty() { "git commit-tree failed".into() } else { msg });
+        }
+        let new = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        rewritten.insert(h.to_string(), new);
+    }
+    let Some(new_tip) = rewritten.get(&head) else {
+        // empty range: the commit is not an ancestor of the current tip
+        return Err("commit is not on the current branch".into());
+    };
+
+    // 3. point the local branches at their new tips. Branches whose tip
+    // is inside the rewritten history (e.g. a merged side branch) move
+    // too; tags are left alone. The current branch is last, guarded by
+    // the old tip so a concurrent update is not clobbered.
+    let symref = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "symbolic-ref", "-q", "HEAD"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let refname = if symref.status.success() {
+        String::from_utf8_lossy(&symref.stdout).trim().to_string()
+    } else {
+        "HEAD".into()
+    };
+    let heads = git_out(&["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads"])?;
+    for line in heads.lines() {
+        let mut it = line.split('\0');
+        let Some((name, obj)) = it.next().zip(it.next()) else {
+            continue;
+        };
+        if name == refname {
+            continue;
+        }
+        if let Some(new) = rewritten.get(obj) {
+            run_git(
+                repo,
+                &["update-ref", "-m", "gitrebase: edit commit details", name, new],
+            )?;
+        }
+    }
+    if refname == "HEAD" {
+        run_git(repo, &["update-ref", "-m", "gitrebase: edit commit details", "HEAD", new_tip, &head])
+    } else {
+        run_git(
+            repo,
+            &["update-ref", "-m", "gitrebase: edit commit details", &refname, new_tip, &head],
+        )
+    }
 }
 
 /// Streams commits (newest first) into `on_commit`.
@@ -1219,6 +1344,130 @@ mod tests {
             git_out(&dir, &["ls-tree", "-r", "--name-only", "HEAD"]).lines().collect::<Vec<_>>(),
             ["a.txt", "b.txt", "c.txt"]
         );
+    }
+
+    #[test]
+    fn edit_preserves_descendant_committers() {
+        let dir = rebase_repo("desc");
+        // the descendant's author and committer differ from the local
+        // identity (Tester <t@t.t>), which rewrites would replace
+        write(&dir, "a.txt", "x\n");
+        git(&dir, &["add", "a.txt"]);
+        git(&dir, &["commit", "-qm", "first"]);
+        write(&dir, "b.txt", "y\n");
+        git(&dir, &["add", "b.txt"]);
+        let out = Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "commit", "-qm", "second"])
+            .env("GIT_AUTHOR_NAME", "Old Author")
+            .env("GIT_AUTHOR_EMAIL", "old-author@o.io")
+            .env("GIT_AUTHOR_DATE", "2026-01-04 05:06:07")
+            .env("GIT_COMMITTER_NAME", "Old Committer")
+            .env("GIT_COMMITTER_EMAIL", "old@o.io")
+            .env("GIT_COMMITTER_DATE", "2026-01-05 06:07:08")
+            .output()
+            .expect("failed to run git");
+        assert!(
+            out.status.success(),
+            "commit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let before = commit_details(&dir, "HEAD").unwrap();
+
+        let first = rev(&dir, "HEAD~1");
+        let mut d = commit_details(&dir, &first).unwrap();
+        d.message = "first (rewritten)".into();
+        edit_commit_details(&dir, &first, &d).unwrap();
+
+        let after = commit_details(&dir, "HEAD").unwrap();
+        // the descendant is untouched: same committer (name, email and
+        // date) and author, only the hash differs
+        assert_eq!(after.committer, before.committer);
+        assert_eq!(after.committer_email, before.committer_email);
+        assert_eq!(after.committer_date, before.committer_date);
+        assert_eq!(after.author, before.author);
+        assert_eq!(after.author_email, before.author_email);
+        assert_eq!(after.author_date, before.author_date);
+        // and the preserved author really is the original one, not the
+        // local identity
+        assert_eq!(after.author, "Old Author");
+        assert_eq!(after.author_email, "old-author@o.io");
+        assert_eq!(after.author_date, "2026-01-04 05:06:07");
+        assert_eq!(after.message, "second");
+        assert_eq!(after.committer_date, "2026-01-05 06:07:08");
+        assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
+    }
+
+    #[test]
+    fn edit_with_merge_descendant() {
+        let dir = rebase_repo("merge");
+        write(&dir, "a.txt", "x\n");
+        git(&dir, &["add", "a.txt"]);
+        git(&dir, &["commit", "-qm", "first"]);
+        write(&dir, "b.txt", "y\n");
+        git(&dir, &["add", "b.txt"]);
+        let out = Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "commit", "-qm", "second"])
+            .env("GIT_COMMITTER_NAME", "Old Committer")
+            .env("GIT_COMMITTER_EMAIL", "old@o.io")
+            .env("GIT_COMMITTER_DATE", "2026-01-05 06:07:08")
+            .output()
+            .expect("failed to run git");
+        assert!(
+            out.status.success(),
+            "commit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // a side branch off "first" and a merge on top of "second"
+        git(&dir, &["checkout", "-qb", "side", "HEAD~1"]);
+        write(&dir, "c.txt", "z\n");
+        git(&dir, &["add", "c.txt"]);
+        git(&dir, &["commit", "-qm", "side work"]);
+        git(&dir, &["checkout", "-q", "main"]);
+        let out = Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "merge", "--no-ff", "-q", "-m", "merged", "side"])
+            .env("GIT_COMMITTER_NAME", "Merge Bot")
+            .env("GIT_COMMITTER_EMAIL", "bot@b.io")
+            .env("GIT_COMMITTER_DATE", "2026-01-09 10:11:12")
+            .output()
+            .expect("failed to run git");
+        assert!(
+            out.status.success(),
+            "merge failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let first = rev(&dir, "HEAD~2");
+        let mut d = commit_details(&dir, &first).unwrap();
+        d.message = "first (rewritten)".into();
+        edit_commit_details(&dir, &first, &d).unwrap();
+
+        // the merge commit keeps both parents, its committer and its
+        // message
+        let parent_str = git_out(&dir, &["log", "-1", "--format=%P", "HEAD"]);
+        let parents: Vec<&str> = parent_str.split_whitespace().collect();
+        assert_eq!(parents.len(), 2);
+        let head = commit_details(&dir, "HEAD").unwrap();
+        assert_eq!(head.committer, "Merge Bot");
+        assert_eq!(head.committer_email, "bot@b.io");
+        assert_eq!(head.committer_date, "2026-01-09 10:11:12");
+        assert_eq!(head.message, "merged");
+        // the "second" descendant (first parent of the merge) keeps its
+        // committer
+        let second = commit_details(&dir, parents[0]).unwrap();
+        assert_eq!(second.committer, "Old Committer");
+        assert_eq!(second.committer_date, "2026-01-05 06:07:08");
+        // the side branch's commit was re-created too (its parent
+        // changed), but author, committer and message are unchanged and
+        // the `side` branch ref points at the new commit
+        let side = commit_details(&dir, parents[1]).unwrap();
+        assert_eq!(side.message, "side work");
+        assert_eq!(side.committer, "Tester");
+        assert_eq!(side.author, "Tester");
+        assert_eq!(git_out(&dir, &["rev-parse", "side"]).trim(), parents[1]);
+        // ... and it was re-parented onto the rewritten "first"
+        let side_parent = git_out(&dir, &["log", "-1", "--format=%P", parents[1]]);
+        assert_eq!(side_parent.trim(), rev(&dir, "HEAD~2"));
+        assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
     }
 
     #[test]
