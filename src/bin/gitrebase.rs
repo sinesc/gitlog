@@ -60,6 +60,10 @@ fn person_row(
     let name = make(name_ph);
     let email = make(email_ph);
     let date = make(date_ph);
+    // the date has a fixed "YYYY-MM-DD HH:MM:SS" format; only that much
+    // width is needed, and it must not claim a third of the row
+    date.set_hexpand(false);
+    date.set_width_chars(19);
     row.append(&name);
     row.append(&email);
     row.append(&date);
@@ -142,7 +146,10 @@ fn main() -> ExitCode {
         let window = gtk::Window::builder()
             .title(t!("rebase.title", hash = &hash).as_ref())
             .default_width(720)
-            .default_height(480)
+            // the message box keeps vexpand, so this controls its size:
+            // the window is shorter than before so the message area ends up
+            // at roughly half its old height
+            .default_height(370)
             .build();
         window.set_application(Some(app));
 
@@ -159,6 +166,23 @@ fn main() -> ExitCode {
         c_name.set_text(&details.committer);
         c_email.set_text(&details.committer_email);
         c_date.set_text(&details.committer_date);
+        // group frame around both rows (same structure/padding as gitpush)
+        let details_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_start(8)
+            .margin_end(8)
+            .margin_bottom(8)
+            .build();
+        details_box.append(&a_row);
+        details_box.append(&c_row);
+        let details_frame = gtk::Frame::builder()
+            .label(t!("rebase.group.details").as_ref())
+            .margin_start(8)
+            .margin_top(8)
+            .margin_end(8)
+            .margin_bottom(8)
+            .build();
+        details_frame.set_child(Some(&details_box));
 
         // ---- pushed warning ----------------------------------------------------
         let warning = gtk::Label::builder()
@@ -180,6 +204,15 @@ fn main() -> ExitCode {
         message_view.buffer().set_text(&details.message);
         let msg_scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
         msg_scroll.set_child(Some(&message_view));
+        // group frame around the message (same structure/padding as gitpush)
+        let msg_frame = gtk::Frame::builder()
+            .label(t!("rebase.message").as_ref())
+            .margin_start(8)
+            .margin_top(8)
+            .margin_end(8)
+            .margin_bottom(8)
+            .build();
+        msg_frame.set_child(Some(&msg_scroll));
 
         // ---- buttons -------------------------------------------------------------
         let cancel_button = gtk::Button::builder()
@@ -202,9 +235,8 @@ fn main() -> ExitCode {
             .orientation(gtk::Orientation::Vertical)
             .build();
         outer.append(&warning);
-        outer.append(&a_row);
-        outer.append(&c_row);
-        outer.append(&msg_scroll);
+        outer.append(&details_frame);
+        outer.append(&msg_frame);
         outer.append(&button_box);
         window.set_child(Some(&outer));
 
