@@ -9,7 +9,8 @@ Active=true
 Name=Git Log
 
 # Tool tip, locale supported (Appears in the status bar)
-Comment=Zeigt das Git Log für den Ordner
+# Replaced by install.sh with the translation for the system locale
+Comment=@NEMO_ACTION_COMMENT@
 
 # What to run.  Enclose in < > to run an executable that resides in the actions folder.
 # **** REQUIRED ****

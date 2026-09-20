@@ -18,10 +18,38 @@ install -m 0755 target/release/gitlog    "$BIN_DIR/gitlog"
 install -m 0755 target/release/gitcommit "$BIN_DIR/gitcommit"
 
 # --- install nemo actions ----------------------------------------------------
+# The Comment field of the action files contains a placeholder that is
+# replaced with the translation for the system locale. Locale detection
+# mirrors src/i18n.rs: the first set variable of LC_ALL / LC_MESSAGES / LANG
+# decides, and an unsupported language falls back to English.
+raw_locale=""
+if [ -n "${LC_ALL+x}" ]; then raw_locale="$LC_ALL"
+elif [ -n "${LC_MESSAGES+x}" ]; then raw_locale="$LC_MESSAGES"
+elif [ -n "${LANG+x}" ]; then raw_locale="$LANG"
+fi
+lang="${raw_locale%%[._-]*}"
+lang="${lang,,}"
+case "$lang" in
+  de) gitlog_comment="Zeigt das Git Log für den Ordner";          gitcommit_comment="Öffnet das Git Commit-Fenster für den Ordner" ;;
+  fr) gitlog_comment="Affiche l'historique git du dossier";      gitcommit_comment="Ouvre la fenêtre de commit git du dossier" ;;
+  es) gitlog_comment="Muestra el registro git de la carpeta";    gitcommit_comment="Abre la ventana de commit de git de la carpeta" ;;
+  it) gitlog_comment="Mostra la cronologia git della cartella";  gitcommit_comment="Apre la finestra di commit git della cartella" ;;
+  nl) gitlog_comment="Toont de git-log van de map";              gitcommit_comment="Opent het git-commitvenster van de map" ;;
+  pt) gitlog_comment="Mostra o log do git da pasta";             gitcommit_comment="Abre a janela de commit do git da pasta" ;;
+  *)  gitlog_comment="Shows the git log for the folder";         gitcommit_comment="Opens the git commit window for the folder" ;;
+esac
+
+install_action() { # $1 = source file, $2 = comment translation
+  local tmp
+  tmp="$(mktemp)"
+  sed "s|@NEMO_ACTION_COMMENT@|$2|" "$1" > "$tmp"
+  install -m 0644 "$tmp" "$NEMO_ACTIONS_DIR/$(basename "$1")"
+  rm -f "$tmp"
+}
 mkdir -p "$NEMO_ACTIONS_DIR"
-install -m 0644 res/gitlog.nemo_action    "$NEMO_ACTIONS_DIR/gitlog.nemo_action"
-install -m 0644 res/gitcommit.nemo_action "$NEMO_ACTIONS_DIR/gitcommit.nemo_action"
-install -m 0755 res/check-git-dir.sh      "$NEMO_ACTIONS_DIR/check-git-dir.sh"
+install_action res/gitlog.nemo_action    "$gitlog_comment"
+install_action res/gitcommit.nemo_action "$gitcommit_comment"
+install -m 0755 res/check-git-dir.sh     "$NEMO_ACTIONS_DIR/check-git-dir.sh"
 
 echo
 echo "Installed:"
