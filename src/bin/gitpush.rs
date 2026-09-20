@@ -131,11 +131,14 @@ fn main() -> ExitCode {
         let remote_frame = gtk::Frame::builder()
             .label(t!("push.group.remote").as_ref())
             .margin_start(8)
+            .margin_top(8)
+            .margin_end(8)
             .margin_bottom(8)
             .build();
         let combo = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .margin_start(8)
+            .margin_end(8)
             .margin_bottom(8)
             .build();
         combo.append(&remote_combo);
@@ -156,6 +159,7 @@ fn main() -> ExitCode {
         let branches_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .margin_start(8)
+            .margin_end(8)
             .margin_bottom(8)
             .build();
         branches_box.append(&all_branches);
@@ -164,6 +168,8 @@ fn main() -> ExitCode {
         let branches_frame = gtk::Frame::builder()
             .label(t!("push.group.branches").as_ref())
             .margin_start(8)
+            .margin_top(8)
+            .margin_end(8)
             .margin_bottom(8)
             .build();
         branches_frame.set_child(Some(&branches_box));
@@ -206,6 +212,7 @@ fn main() -> ExitCode {
         let options_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .margin_start(8)
+            .margin_end(8)
             .margin_bottom(8)
             .build();
         options_box.append(&force_row);
@@ -213,6 +220,8 @@ fn main() -> ExitCode {
         let options_frame = gtk::Frame::builder()
             .label(t!("push.group.options").as_ref())
             .margin_start(8)
+            .margin_top(8)
+            .margin_end(8)
             .margin_bottom(8)
             .build();
         options_frame.set_child(Some(&options_box));
