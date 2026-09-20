@@ -577,74 +577,36 @@ fn main() -> ExitCode {
             });
         }
 
-        // ---- commit list context menu: edit commit details ---------------------
+        // ---- edit commit details: double-click a commit ------------------------
         {
-            // Right-click the commit list: a one-item popover (the gtk4-rs
-            // bindings have no TreeView populate-popup-menu signal), popped
-            // up at the tree. The selected hash is resolved when the menu
-            // item is clicked — not when the right-click lands, because the
-            // gesture fires before the tree view updates the selection.
             let log_tree = ui.log_tree.clone();
             let log_store = ui.log_store.clone();
             let log_filter = log_filter.clone();
-            let selection = log_tree.selection();
-
-            let menu = gtk::Popover::builder().build();
-            // a plain button with the `menuitem` style reads like a menu entry
-            let menu_item = gtk::Button::builder()
-                .label(t!("rebase.edit").into_owned())
-                .build();
-            menu_item.add_css_class("menuitem");
-            {
-                let menu = menu.clone();
-                let store = log_store.clone();
-                let filter = log_filter.clone();
-                let selection = selection.clone();
-                let repo = ui.repo.to_string_lossy().into_owned();
-                // the sibling binary next to this executable (works both in
-                // the build tree and after install.sh); PATH as fallback
-                let rebase_bin = std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|d| d.join("gitrebase")))
-                    .filter(|p| p.exists())
-                    .unwrap_or_else(|| std::path::PathBuf::from("gitrebase"));
-                menu_item.connect_clicked(move |_| {
-                    // same filtered-model path conversion as the
-                    // selection-changed handler
-                    let (paths, _model) = selection.selected_rows();
-                    let Some(path) = paths.into_iter().next() else {
-                        return;
-                    };
-                    let Some(store_path) = filter.convert_path_to_child_path(&path) else {
-                        return;
-                    };
-                    let Some(iter) = store.iter(&store_path) else {
-                        return;
-                    };
-                    let h = store.get(&iter, LOG_HASH as i32);
-                    if let Err(e) = std::process::Command::new(&rebase_bin)
-                        .args([&repo, &h])
-                        .spawn()
-                    {
-                        eprintln!("gitlog: cannot open gitrebase: {e}");
-                    }
-                    menu.popdown();
-                });
-            }
-            menu.set_child(Some(&menu_item));
-            // the popover points at the tree (its parent) when popped up
-            gtk::prelude::WidgetExt::set_parent(&menu, &log_tree);
-
-            // right-click (secondary button) on the tree opens the menu
-            let gesture = gtk::GestureClick::new();
-            gesture.set_button(3);
-            {
-                let menu = menu.clone();
-                gesture.connect_pressed(move |_g, _n, _x, _y| {
-                    menu.popup();
-                });
-            }
-            log_tree.add_controller(gesture.clone());
+            let repo = ui.repo.to_string_lossy().into_owned();
+            // the sibling binary next to this executable (works both in
+            // the build tree and after install.sh); PATH as fallback
+            let rebase_bin = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("gitrebase")))
+                .filter(|p| p.exists())
+                .unwrap_or_else(|| std::path::PathBuf::from("gitrebase"));
+            log_tree.connect_row_activated(move |_tree, path, _column| {
+                // same filtered-model path conversion as the
+                // selection-changed handler
+                let Some(store_path) = log_filter.convert_path_to_child_path(path) else {
+                    return;
+                };
+                let Some(iter) = log_store.iter(&store_path) else {
+                    return;
+                };
+                let h = log_store.get(&iter, LOG_HASH as i32);
+                if let Err(e) = std::process::Command::new(&rebase_bin)
+                    .args([&repo, &h])
+                    .spawn()
+                {
+                    eprintln!("gitlog: cannot open gitrebase: {e}");
+                }
+            });
         }
 
         // ---- start background load ---------------------------------------------

@@ -9,4 +9,4 @@
 - note: we're not implementing file changes/commit reording etc for now, just commit detail editing
 - if the commit branch has already been pushed: brief warning message that editing already pushed commits may cause issues for other contributors (if hard to identify defer it for now)
 - 'Cancel' and 'Apply' buttons at the bottom
-- add context menu entry to the `gitlog` binary's commit list to open `gitrebase` on the selected commit (label: Edit commit details)
+- open `gitrebase` on the selected commit from the `gitlog` binary by double-clicking it in the commit list (a right-click context menu was tried but did not read as a standard menu)
