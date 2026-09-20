@@ -44,5 +44,17 @@
   "push.push": "Push",
   "error.push_failed": "El push falló: %{error}",
   "error.no_remotes": "No hay remotos configurados.",
-  "error.close": "Cerrar"
+  "error.close": "Cerrar",
+  "rebase.title": "git rebase - %{hash}",
+  "rebase.author": "Autor",
+  "rebase.email": "Correo electrónico",
+  "rebase.date": "Fecha (YYYY-MM-DD HH:MM:SS)",
+  "rebase.committer": "Comitter",
+  "rebase.message": "Mensaje del commit",
+  "rebase.cancel": "Cancelar",
+  "rebase.apply": "Aplicar",
+  "rebase.pushed": "Advertencia: este commit puede haberse enviado (push). Reescribir commits ya enviados puede causar problemas a otros colaboradores.",
+  "rebase.edit": "Editar detalles del commit",
+  "error.rebase_failed": "Falló la reescritura del commit: %{error}",
+  "error.invalid_date": "Fecha no válida: formato esperado YYYY-MM-DD HH:MM:SS."
 }

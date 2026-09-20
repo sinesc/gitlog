@@ -44,5 +44,17 @@
   "push.push": "Push",
   "error.push_failed": "Push failed: %{error}",
   "error.no_remotes": "No remotes are configured.",
-  "error.close": "Close"
+  "error.close": "Close",
+  "rebase.title": "git rebase - %{hash}",
+  "rebase.author": "Author",
+  "rebase.email": "Email",
+  "rebase.date": "Date (YYYY-MM-DD HH:MM:SS)",
+  "rebase.committer": "Committer",
+  "rebase.message": "Commit message",
+  "rebase.cancel": "Cancel",
+  "rebase.apply": "Apply",
+  "rebase.pushed": "Warning: this commit may have been pushed. Rewriting pushed commits can cause problems for other contributors.",
+  "rebase.edit": "Edit commit details",
+  "error.rebase_failed": "Rewriting the commit failed: %{error}",
+  "error.invalid_date": "Invalid date: expected format YYYY-MM-DD HH:MM:SS."
 }

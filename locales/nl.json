@@ -44,5 +44,17 @@
   "push.push": "Pushen",
   "error.push_failed": "Pushen mislukt: %{error}",
   "error.no_remotes": "Er zijn geen remotes geconfigureerd.",
-  "error.close": "Sluiten"
+  "error.close": "Sluiten",
+  "rebase.title": "git rebase - %{hash}",
+  "rebase.author": "Auteur",
+  "rebase.email": "E-mail",
+  "rebase.date": "Datum (YYYY-MM-DD HH:MM:SS)",
+  "rebase.committer": "Committer",
+  "rebase.message": "Commitbericht",
+  "rebase.cancel": "Annuleren",
+  "rebase.apply": "Toepassen",
+  "rebase.pushed": "Waarschuwing: deze commit is mogelijk al gepusht. Het aanpassen van commits die al gepusht zijn, kan problemen veroorzaken voor andere bijdragers.",
+  "rebase.edit": "Commitdetails bewerken",
+  "error.rebase_failed": "Het herschrijven van de commit is mislukt: %{error}",
+  "error.invalid_date": "Ongeldige datum: verwacht formaat YYYY-MM-DD HH:MM:SS."
 }

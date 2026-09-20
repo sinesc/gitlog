@@ -44,5 +44,17 @@
   "push.push": "Pushen",
   "error.push_failed": "Push fehlgeschlagen: %{error}",
   "error.no_remotes": "Es sind keine Remotes konfiguriert.",
-  "error.close": "Schließen"
+  "error.close": "Schließen",
+  "rebase.title": "git rebase - %{hash}",
+  "rebase.author": "Autor",
+  "rebase.email": "E-Mail",
+  "rebase.date": "Datum (YYYY-MM-DD HH:MM:SS)",
+  "rebase.committer": "Committer",
+  "rebase.message": "Commit-Nachricht",
+  "rebase.cancel": "Abbrechen",
+  "rebase.apply": "Anwenden",
+  "rebase.pushed": "Warnung: Dieser Commit wurde möglicherweise bereits gepusht. Das Ändern bereits gepushter Commits kann für andere Mitwirkende Probleme verursachen.",
+  "rebase.edit": "Commit-Details bearbeiten",
+  "error.rebase_failed": "Das Ändern des Commits ist fehlgeschlagen: %{error}",
+  "error.invalid_date": "Ungültiges Datum: erwartetes Format YYYY-MM-DD HH:MM:SS."
 }

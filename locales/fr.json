@@ -44,5 +44,17 @@
   "push.push": "Pusher",
   "error.push_failed": "Push échoué : %{error}",
   "error.no_remotes": "Aucun remote n'est configuré.",
-  "error.close": "Fermer"
+  "error.close": "Fermer",
+  "rebase.title": "git rebase - %{hash}",
+  "rebase.author": "Auteur",
+  "rebase.email": "E-mail",
+  "rebase.date": "Date (YYYY-MM-DD HH:MM:SS)",
+  "rebase.committer": "Committor",
+  "rebase.message": "Message du commit",
+  "rebase.cancel": "Annuler",
+  "rebase.apply": "Appliquer",
+  "rebase.pushed": "Attention : cet commit a peut-être déjà été poussé (push). Réécrire des commits déjà poussés peut causer des problèmes aux autres contributeurs.",
+  "rebase.edit": "Modifier les détails du commit",
+  "error.rebase_failed": "L'écriture du commit a échoué : %{error}",
+  "error.invalid_date": "Date invalide : format attendu YYYY-MM-DD HH:MM:SS."
 }

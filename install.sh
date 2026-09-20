@@ -17,6 +17,7 @@ mkdir -p "$BIN_DIR"
 install -m 0755 target/release/gitlog    "$BIN_DIR/gitlog"
 install -m 0755 target/release/gitcommit "$BIN_DIR/gitcommit"
 install -m 0755 target/release/gitpush   "$BIN_DIR/gitpush"
+install -m 0755 target/release/gitrebase "$BIN_DIR/gitrebase"
 
 # --- install nemo actions ----------------------------------------------------
 # The Comment field of the action files contains a placeholder that is

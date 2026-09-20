@@ -453,6 +453,171 @@ pub fn do_commit(repo: &Path, message: &str, amend: bool) -> Result<(), String> 
     }
 }
 
+/// The editable fields of one existing commit (the rebase window).
+pub struct CommitDetails {
+    pub author: String,
+    pub author_email: String,
+    /// "YYYY-MM-DD HH:MM:SS" in local time
+    pub author_date: String,
+    pub committer: String,
+    pub committer_email: String,
+    /// "YYYY-MM-DD HH:MM:SS" in local time
+    pub committer_date: String,
+    pub message: String,
+}
+
+/// Reads the author/committer fields and the message of one commit.
+/// Dates come back in local time; the NUL-separated format keeps names
+/// and emails with spaces or `<>` intact.
+pub fn commit_details(repo: &Path, hash: &str) -> Result<CommitDetails, String> {
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy()])
+        .args([
+            "log",
+            "-1",
+            "--date=format-local:%Y-%m-%d %H:%M:%S",
+            "--format=%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd%x00%B",
+            hash,
+        ])
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if msg.is_empty() { "git command failed".into() } else { msg });
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let fields: Vec<&str> = text.split('\0').collect();
+    if fields.len() < 7 {
+        return Err("unexpected git output".into());
+    }
+    Ok(CommitDetails {
+        author: fields[0].to_string(),
+        author_email: fields[1].to_string(),
+        author_date: fields[2].to_string(),
+        committer: fields[3].to_string(),
+        committer_email: fields[4].to_string(),
+        committer_date: fields[5].to_string(),
+        // %B carries trailing newlines; trim them
+        message: fields[6].trim_end_matches('\n').to_string(),
+    })
+}
+
+/// True if the commit is reachable from any remote-tracking branch.
+pub fn is_pushed(repo: &Path, hash: &str) -> bool {
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "branch", "-r", "--contains", hash])
+        .output()
+        .ok();
+    output
+        .filter(|o| o.status.success())
+        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false)
+    }
+
+/// Rewrites the details of one commit (the tree is not changed).
+/// The HEAD commit is amended in place; other ancestors of the current
+/// HEAD are stopped in a non-interactive `git rebase -i`, amended there,
+/// and the rebase is continued (the replay above applies cleanly because
+/// no tree changes). Requires a clean work tree.
+pub fn edit_commit_details(repo: &Path, hash: &str, d: &CommitDetails) -> Result<(), String> {
+    // the rebase requires a clean work tree; keeping it uniform for the
+    // plain-amend path too
+    let status = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "status", "--porcelain"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !status
+        .status
+        .success()
+        || !String::from_utf8_lossy(&status.stdout).trim().is_empty()
+    {
+        return Err("uncommitted changes in the work tree".into());
+    }
+
+    // full hash (also verifies the argument)
+    let full = Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "rev-parse",
+            "-q",
+            "--verify",
+            &format!("{hash}^{{commit}}"),
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !full.status.success() {
+        return Err(format!("commit {hash} not found"));
+    }
+    let full = String::from_utf8_lossy(&full.stdout).trim().to_string();
+
+    // `git commit --amend` with the new identity: `--author` and `--date`
+    // set the author fields, the GIT_COMMITTER_* environment sets the
+    // committer fields (dates in local time, as git reads them)
+    let amend = || {
+        let author = format!("{} <{}>", d.author, d.author_email);
+        let mut cmd = Command::new("git");
+        cmd.args(["-C", &repo.to_string_lossy()]);
+        cmd.args([
+            "commit",
+            "--amend",
+            "-m",
+            &d.message,
+            "--author",
+            &author,
+            "--date",
+            &d.author_date,
+        ]);
+        cmd.env("GIT_COMMITTER_NAME", &d.committer);
+        cmd.env("GIT_COMMITTER_EMAIL", &d.committer_email);
+        cmd.env("GIT_COMMITTER_DATE", &d.committer_date);
+        cmd.stderr(Stdio::piped());
+        let output = cmd.output().map_err(|e| e.to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(if msg.is_empty() { "git commit --amend failed".into() } else { msg })
+        }
+    };
+
+    let head = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "rev-parse", "-q", "HEAD"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    if full == head {
+        // checked-out tip: a plain amend is enough
+        return amend();
+    }
+
+    // stop a non-interactive rebase at the commit (`pick` -> `edit`);
+    // git exits 0 while stopped
+    let has_parent = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "rev-parse", "-q", "--verify", &format!("{hash}^")])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let mut cmd = Command::new("git");
+    cmd.args(["-C", &repo.to_string_lossy()]);
+    if has_parent {
+        cmd.args(["rebase", "-i", &format!("{hash}^")]);
+    } else {
+        // root commit: no parent to base the rebase on
+        cmd.args(["rebase", "-i", "--root"]);
+    }
+    cmd.env("GIT_SEQUENCE_EDITOR", "sed -i '1s/^pick/edit/'");
+    cmd.stderr(Stdio::piped());
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if msg.is_empty() { "git rebase failed".into() } else { msg });
+    }
+    amend()?;
+    run_git(repo, &["rebase", "--continue"])
+}
+
 /// Streams commits (newest first) into `on_commit`.
 /// `on_commit` returning `false` stops the load.
 pub fn load_commits<F: FnMut(Commit) -> bool>(
@@ -910,5 +1075,204 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).trim(),
             "origin"
         );
+    }
+
+    /// Fresh repo with identity configured, for the rebase tests.
+    fn rebase_repo(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gitlog-test-rebase-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q", "-b", "main"]);
+        git(&dir, &["config", "user.email", "t@t.t"]);
+        git(&dir, &["config", "user.name", "Tester"]);
+        dir
+    }
+
+    fn git_out(repo: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(["-C", &repo.to_string_lossy()])
+            .args(args)
+            .output()
+            .expect("failed to run git");
+        assert!(
+            out.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
+    #[test]
+    fn commit_details_fields() {
+        let dir = rebase_repo("details");
+        write(&dir, "a.txt", "x\n");
+        git(&dir, &["add", "a.txt"]);
+        let out = Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "commit", "-qm", "hello\n\nbody"])
+            .env("GIT_AUTHOR_NAME", "Ann Author")
+            .env("GIT_AUTHOR_EMAIL", "ann@a.io")
+            .env("GIT_AUTHOR_DATE", "2026-01-02 03:04:05")
+            .env("GIT_COMMITTER_NAME", "Carl Committer")
+            .env("GIT_COMMITTER_EMAIL", "carl@c.io")
+            .env("GIT_COMMITTER_DATE", "2026-01-03 04:05:06")
+            .output()
+            .expect("failed to run git");
+        assert!(
+            out.status.success(),
+            "commit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let d = commit_details(&dir, "HEAD").unwrap();
+        assert_eq!(d.author, "Ann Author");
+        assert_eq!(d.author_email, "ann@a.io");
+        assert_eq!(d.author_date, "2026-01-02 03:04:05");
+        assert_eq!(d.committer, "Carl Committer");
+        assert_eq!(d.committer_email, "carl@c.io");
+        assert_eq!(d.committer_date, "2026-01-03 04:05:06");
+        assert_eq!(d.message, "hello\n\nbody");
+
+        // unknown hash is an error
+        assert!(commit_details(&dir, "deadbeef").is_err());
+    }
+
+    #[test]
+    fn edit_head_commit_amend() {
+        let dir = rebase_repo("head");
+        write(&dir, "a.txt", "content\n");
+        git(&dir, &["add", "a.txt"]);
+        git(&dir, &["commit", "-qm", "first"]);
+
+        let mut d = commit_details(&dir, "HEAD").unwrap();
+        d.author = "New Author".into();
+        d.author_email = "na@x.io".into();
+        d.author_date = "2026-01-01 02:03:04".into();
+        d.committer = "New Committer".into();
+        d.committer_email = "nc@x.io".into();
+        d.committer_date = "2026-01-02 03:04:05".into();
+        d.message = "rewritten\n\nbody".into();
+
+        // a dirty work tree is refused
+        write(&dir, "a.txt", "dirty\n");
+        let err = edit_commit_details(&dir, "HEAD", &d).unwrap_err();
+        assert!(err.contains("uncommitted changes"), "got: {err}");
+
+        git(&dir, &["checkout", "-q", "--", "a.txt"]);
+        edit_commit_details(&dir, "HEAD", &d).unwrap();
+
+        let after = commit_details(&dir, "HEAD").unwrap();
+        assert_eq!(after.author, "New Author");
+        assert_eq!(after.author_email, "na@x.io");
+        assert_eq!(after.author_date, "2026-01-01 02:03:04");
+        assert_eq!(after.committer, "New Committer");
+        assert_eq!(after.committer_email, "nc@x.io");
+        assert_eq!(after.committer_date, "2026-01-02 03:04:05");
+        assert_eq!(after.message, "rewritten\n\nbody");
+        // the file content is untouched
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "content\n");
+        assert_eq!(
+            git_out(&dir, &["log", "-1", "--format=", "--name-only"]).lines().filter(|l| !l.is_empty()).collect::<Vec<_>>(),
+            ["a.txt"]
+        );
+    }
+
+    #[test]
+    fn edit_middle_commit_rebase() {
+        let dir = rebase_repo("middle");
+        for (f, m) in [("a.txt", "first"), ("b.txt", "second"), ("c.txt", "third")] {
+            write(&dir, f, &format!("{f}\n"));
+            git(&dir, &["add", f]);
+            git(&dir, &["commit", "-qm", m]);
+        }
+        let middle = rev(&dir, "HEAD~1");
+
+        let mut d = commit_details(&dir, &middle).unwrap();
+        assert_eq!(d.message, "second");
+        d.author = "New Author".into();
+        d.author_email = "na@x.io".into();
+        d.author_date = "2026-01-01 02:03:04".into();
+        d.committer = "New Committer".into();
+        d.committer_email = "nc@x.io".into();
+        d.committer_date = "2026-01-02 03:04:05".into();
+        d.message = "second (rewritten)".into();
+
+        edit_commit_details(&dir, &middle, &d).unwrap();
+
+        // top and bottom commits keep their identity and message
+        assert_eq!(
+            git_out(&dir, &["log", "--format=%s|%an", "-3"]).lines().collect::<Vec<_>>(),
+            ["third|Tester", "second (rewritten)|New Author", "first|Tester"]
+        );
+
+        let after = commit_details(&dir, "HEAD~1").unwrap();
+        assert_eq!(after.author_email, "na@x.io");
+        assert_eq!(after.author_date, "2026-01-01 02:03:04");
+        assert_eq!(after.committer, "New Committer");
+        assert_eq!(after.committer_email, "nc@x.io");
+        assert_eq!(after.committer_date, "2026-01-02 03:04:05");
+        assert_eq!(after.message, "second (rewritten)");
+
+        // work tree clean, all files intact
+        assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
+        assert_eq!(
+            git_out(&dir, &["ls-tree", "-r", "--name-only", "HEAD"]).lines().collect::<Vec<_>>(),
+            ["a.txt", "b.txt", "c.txt"]
+        );
+    }
+
+    #[test]
+    fn edit_root_commit() {
+        let dir = rebase_repo("root");
+        write(&dir, "a.txt", "a\n");
+        git(&dir, &["add", "a.txt"]);
+        git(&dir, &["commit", "-qm", "first"]);
+        write(&dir, "b.txt", "b\n");
+        git(&dir, &["add", "b.txt"]);
+        git(&dir, &["commit", "-qm", "second"]);
+
+        let root = rev(&dir, "HEAD~1");
+        let mut d = commit_details(&dir, &root).unwrap();
+        d.author = "New Author".into();
+        d.author_email = "na@x.io".into();
+        d.author_date = "2026-01-01 02:03:04".into();
+        d.committer = "New Committer".into();
+        d.committer_email = "nc@x.io".into();
+        d.committer_date = "2026-01-02 03:04:05".into();
+        d.message = "first (rewritten)".into();
+
+        edit_commit_details(&dir, &root, &d).unwrap();
+
+        assert_eq!(
+            git_out(&dir, &["log", "--format=%s|%an", "-2"]).lines().collect::<Vec<_>>(),
+            ["second|Tester", "first (rewritten)|New Author"]
+        );
+        assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
+    }
+
+    #[test]
+    fn is_pushed_check() {
+        let dir = fixture_repo("pushed");
+        // no remotes configured: nothing is pushed
+        assert!(!is_pushed(&dir, "HEAD"));
+
+        let bare = std::env::temp_dir().join(format!("gitlog-test-rebase-origin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bare);
+        let out = Command::new("git")
+            .args(["init", "--bare", "-q", &bare.to_string_lossy()])
+            .output()
+            .expect("failed to run git");
+        assert!(
+            out.status.success(),
+            "git init --bare failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        git(&dir, &["remote", "add", "origin", &bare.to_string_lossy()]);
+        run_git(&dir, &["push", "origin", "main"]).unwrap();
+
+        // the whole pushed history is reachable from origin/main
+        assert!(is_pushed(&dir, "HEAD"));
+        assert!(is_pushed(&dir, "HEAD~1"));
+        assert!(is_pushed(&dir, "HEAD~2"));
     }
 }
