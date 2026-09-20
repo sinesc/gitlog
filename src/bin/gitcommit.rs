@@ -54,10 +54,20 @@ fn num_str(n: Option<i64>) -> String {
 fn amend_files(repo: &Path) -> Vec<gl::WorkFile> {
     let mut files = gl::head_files(repo).unwrap_or_default();
     for w in gl::worktree_changes(repo) {
-        match files.iter_mut().find(|f| f.path == w.path) {
+        // a rename row carries the *new* path: also match the head row of
+        // the old path, otherwise the file appears twice (once from the
+        // previous commit, once as "old => new") and committing fails
+        // because the old path no longer exists
+        let old_path = w.display_name.split("=>").next().unwrap_or("").trim();
+        let is_rename = w.action == gl::Action::Renamed;
+        match files
+            .iter_mut()
+            .find(|f| f.path == w.path || (is_rename && f.path == old_path))
+        {
             // changed in the work tree: keep the "in head" flag, show the
             // current diff against HEAD
             Some(h) => {
+                h.path = w.path.clone();
                 h.display_name = w.display_name;
                 h.action = w.action;
                 h.added = w.added;
@@ -419,6 +429,17 @@ mod amend_files_tests {
     use super::*;
     use std::process::Command;
 
+    fn test_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gitcommit-test-{}-{}",
+            std::process::id(),
+            tag
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     fn git(repo: &Path, args: &[&str]) {
         let out = Command::new("git")
             .args(["-C", &repo.to_string_lossy()])
@@ -435,9 +456,7 @@ mod amend_files_tests {
 
     #[test]
     fn amend_files_merges_head_and_worktree() {
-        let dir = std::env::temp_dir().join(format!("gitcommit-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = test_dir("merge");
         git(&dir, &["init", "-q", "-b", "main"]);
         git(&dir, &["config", "user.email", "t@t.t"]);
         git(&dir, &["config", "user.name", "Tester"]);
@@ -464,5 +483,61 @@ mod amend_files_tests {
         // untracked work tree file
         let n = files.iter().find(|f| f.path == "new.txt").expect("new.txt");
         assert!(!n.in_head);
+    }
+
+    #[test]
+    fn amend_files_merges_rename_of_head_file() {
+        let dir = test_dir("merge-rename");
+        git(&dir, &["init", "-q", "-b", "main"]);
+        git(&dir, &["config", "user.email", "t@t.t"]);
+        git(&dir, &["config", "user.name", "Tester"]);
+        std::fs::write(dir.join("x.txt"), "line1\n").unwrap();
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "first"]);
+
+        // rename after the commit: must show as a single "old => new" row,
+        // not as a head row for the old path plus a rename row
+        git(&dir, &["mv", "x.txt", "y.txt"]);
+        let files = amend_files(&dir);
+        assert_eq!(files.len(), 1);
+        let r = &files[0];
+        assert_eq!(r.path, "y.txt");
+        assert_eq!(r.display_name, "x.txt => y.txt");
+        assert_eq!(r.action, gl::Action::Renamed);
+        assert!(r.in_head);
+    }
+
+    #[test]
+    fn amend_rename_commit_flow() {
+        let dir = test_dir("rename-flow");
+        git(&dir, &["init", "-q", "-b", "main"]);
+        git(&dir, &["config", "user.email", "t@t.t"]);
+        git(&dir, &["config", "user.name", "Tester"]);
+        // parent commit so the amended commit's diff shows the rename
+        std::fs::write(dir.join("z.txt"), "z\n").unwrap();
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "first"]);
+        std::fs::write(dir.join("x.txt"), "line1\n").unwrap();
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "second"]);
+        git(&dir, &["mv", "x.txt", "y.txt"]);
+
+        // the single merged row is checked; committing must not fail on the
+        // old path anymore
+        let files = amend_files(&dir);
+        assert_eq!(files.len(), 1);
+        commit_checked(
+            &dir,
+            &[(files[0].path.clone(), true, files[0].in_head, files[0].staged)],
+            true,
+            "amended with rename",
+        )
+        .unwrap();
+        let head = gl::head_files(&dir).expect("head_files after amend");
+        assert_eq!(head.len(), 1);
+        assert_eq!(head[0].path, "y.txt");
+        // x.txt only existed in the amended-away commit, so relative to the
+        // parent the file is a plain add (no rename to show)
+        assert_eq!(head[0].action, gl::Action::Added);
     }
 }
