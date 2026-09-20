@@ -29,7 +29,10 @@ pub struct FileStat {
 
 #[derive(Clone)]
 pub struct Commit {
+    /// Abbreviated hash, as shown in the commit list
     pub hash: String,
+    /// Full 40-char hash
+    pub full_hash: String,
     /// Names of local/remote branches whose tip is this commit (empty for
     /// commits that are not at the tip of any branch)
     pub branches: Vec<String>,
@@ -504,6 +507,7 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
             let branches = tips.get(&full).cloned().unwrap_or_default();
             let commit = Commit {
                 hash,
+                full_hash: full,
                 branches,
                 subject: subject.to_string(),
                 // %B carries trailing newlines; trim them

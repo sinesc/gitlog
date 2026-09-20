@@ -178,15 +178,14 @@ impl Ui {
         };
         *self.selected_hash.lock().unwrap() = Some(commit.hash.clone());
         // header: committer always, author only when it differs from the
-        // committer, plus the short hash
+        // committer, plus the full hash
         let mut text = t!("commit.committer", name = &commit.committer).into_owned();
         text.push('\n');
         if commit.committer != commit.author {
             text.push_str(&t!("commit.author", name = &commit.author));
             text.push('\n');
         }
-        let short = commit.hash.get(..8).unwrap_or(&commit.hash);
-        text.push_str(&t!("commit.hash", hash = short));
+        text.push_str(&t!("commit.hash", hash = &commit.full_hash));
         text.push_str("\n\n");
         text.push_str(&commit.message);
         self.message_view.buffer().set_text(&text);
