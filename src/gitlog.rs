@@ -119,7 +119,7 @@ pub fn branch_tips(repo: &Path) -> HashMap<String, Vec<String>> {
             "for-each-ref",
             "refs/heads",
             "refs/remotes",
-            "--format=%(objectname)\x01%(refname:short)",
+            "--format=%(refname)\x01%(objectname)\x01%(refname:short)",
         ])
         .output()
     else {
@@ -127,11 +127,18 @@ pub fn branch_tips(repo: &Path) -> HashMap<String, Vec<String>> {
     };
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if let Some((hash, name)) = line.split_once('\x01') {
-            map.entry(hash.trim().to_string())
-                .or_default()
-                .push(name.to_string());
+        let Some((refname, rest)) = line.split_once('\x01') else { continue };
+        let Some((hash, name)) = rest.split_once('\x01') else { continue };
+        // Skip symbolic HEAD refs (e.g. refs/remotes/origin/HEAD); their
+        // refname:short collapses to just the remote name ("origin"), which
+        // would show up as a phantom branch tip. Their target branch is
+        // listed on its own.
+        if refname.trim().ends_with("/HEAD") {
+            continue;
         }
+        map.entry(hash.trim().to_string())
+            .or_default()
+            .push(name.to_string());
     }
     map
 }
@@ -743,9 +750,17 @@ mod tests {
         // branch tips: local branch first, then remote-tracking branches
         git(&dir, &["update-ref", "refs/remotes/origin/main", &head]);
         git(&dir, &["update-ref", "refs/remotes/github/main", &second]);
+        // remote HEAD symref (as created by git fetch); its refname:short
+        // is "origin" and it must not show up as a branch tip
+        git(&dir, &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ]);
         let tips = branch_tips(&dir);
         assert_eq!(tips.get(&head), Some(&vec!["main".to_string(), "origin/main".to_string()]));
         assert_eq!(tips.get(&second), Some(&vec!["github/main".to_string()]));
+        assert!(!tips.values().flatten().any(|b| b == "origin"));
     }
 
     #[test]
