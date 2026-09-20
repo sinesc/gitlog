@@ -265,7 +265,9 @@ fn main() -> ExitCode {
             .right_margin(8)
             .top_margin(8)
             .build();
-        let msg_scroll = gtk::ScrolledWindow::builder().build();
+        // vexpand so the text area fills the top pane (the scrolled window
+        // otherwise only requests the text view's minimal height)
+        let msg_scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
         msg_scroll.set_child(Some(&message_view));
 
         let amend_check = gtk::CheckButton::builder()
@@ -341,6 +343,8 @@ fn main() -> ExitCode {
                     }
                     add_file_rows(&store, &amend_files(&repo), |_| true);
                 } else {
+                    // back to a normal commit: drop the pre-filled message
+                    buffer.set_text("");
                     add_file_rows(&store, &gl::worktree_changes(&repo), |f| f.staged);
                 }
             });
