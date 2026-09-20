@@ -593,6 +593,7 @@ fn main() -> ExitCode {
             let win = window.clone();
             let repo_name = repo_name.clone();
             let branch = branch.clone();
+            let log_scroll = log_scroll.clone();
             let _id = glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
                 let rx = commit_rx.lock().unwrap();
                 loop {
@@ -602,7 +603,22 @@ fn main() -> ExitCode {
                             ui.insert_commit(commit);
                             if first {
                                 let path = gtk::TreePath::from_indices(&[0]);
-                                gtk::prelude::TreeViewExt::set_cursor(&ui.log_tree, &path, None, false);
+                                gtk::prelude::TreeViewExt::set_cursor(&ui.log_tree, &path, None, true);
+                                // GTK can leave the scrolled window offset when the
+                                // first rows land around the initial allocation
+                                // (first commit hidden, second at the top), so the
+                                // view is forced to the top commit both now and
+                                // again once the initial allocation has settled.
+                                let adj = log_scroll.vadjustment();
+                                adj.set_value(0.0);
+                                let settled = adj.clone();
+                                let _ = glib::timeout_add_local(
+                                    std::time::Duration::from_millis(150),
+                                    move || {
+                                        settled.set_value(0.0);
+                                        glib::ControlFlow::Break
+                                    },
+                                );
                             }
                         }
                         Ok(_) => break,
