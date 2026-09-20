@@ -113,34 +113,62 @@ fn main() -> ExitCode {
 
         let remotes = gl::remotes(&repo);
         let title_branch = gl::head_info(&repo);
+        // no default height: the window fits tightly around the content
         let window = gtk::Window::builder()
             .title(t!("push.title", branch = &title_branch).as_ref())
             .default_width(720)
-            .default_height(400)
             .build();
         window.set_application(Some(app));
 
-        // ---- form -------------------------------------------------------------
-        let all_branches = gtk::CheckButton::builder()
-            .label(t!("push.all_branches").as_ref())
-            .margin_start(8)
-            .margin_bottom(4)
-            .build();
-
+        // ---- form: three grouped sections ---------------------------------------
+        // group 1: remote
         let remote_combo = gtk::ComboBoxText::new();
         remote_combo.append_text(&t!("push.all_remotes"));
         for r in &remotes {
             remote_combo.append_text(r);
         }
         remote_combo.set_active(Some(0));
+        let remote_frame = gtk::Frame::builder()
+            .label(t!("push.group.remote").as_ref())
+            .margin_start(8)
+            .margin_bottom(8)
+            .build();
+        let combo = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_start(8)
+            .margin_bottom(8)
+            .build();
+        combo.append(&remote_combo);
+        remote_frame.set_child(Some(&combo));
 
+        // group 2: branches
+        let all_branches = gtk::CheckButton::builder()
+            .label(t!("push.all_branches").as_ref())
+            .margin_start(8)
+            .margin_bottom(4)
+            .build();
         let local_entry = gtk::Entry::builder().hexpand(true).build();
         local_entry.set_text(&gl::current_branch(&repo));
         let remote_entry = gtk::Entry::builder().hexpand(true).build();
         // empty = keep the local name; the placeholder documents that
         let placeholder = t!("push.remote_branch");
         remote_entry.set_placeholder_text(Some(placeholder.as_ref()));
+        let branches_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_start(8)
+            .margin_bottom(8)
+            .build();
+        branches_box.append(&all_branches);
+        add_row(&branches_box, &t!("push.local_branch"), &local_entry);
+        add_row(&branches_box, &t!("push.remote_branch"), &remote_entry);
+        let branches_frame = gtk::Frame::builder()
+            .label(t!("push.group.branches").as_ref())
+            .margin_start(8)
+            .margin_bottom(8)
+            .build();
+        branches_frame.set_child(Some(&branches_box));
 
+        // group 3: push options
         let force_check = gtk::CheckButton::builder()
             .label(t!("push.force").as_ref())
             .margin_start(8)
@@ -159,17 +187,6 @@ fn main() -> ExitCode {
             .label(t!("push.set_upstream").as_ref())
             .margin_start(24)
             .build();
-
-        // vexpand so the buttons stay at the bottom of the window
-        let form = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .vexpand(true)
-            .build();
-        form.append(&all_branches);
-        add_row(&form, &t!("push.remote"), &remote_combo);
-        add_row(&form, &t!("push.local_branch"), &local_entry);
-        add_row(&form, &t!("push.remote_branch"), &remote_entry);
-
         let force_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
@@ -186,8 +203,28 @@ fn main() -> ExitCode {
             .build();
         options_row.append(&tags_check);
         options_row.append(&upstream_check);
-        form.append(&force_row);
-        form.append(&options_row);
+        let options_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_start(8)
+            .margin_bottom(8)
+            .build();
+        options_box.append(&force_row);
+        options_box.append(&options_row);
+        let options_frame = gtk::Frame::builder()
+            .label(t!("push.group.options").as_ref())
+            .margin_start(8)
+            .margin_bottom(8)
+            .build();
+        options_frame.set_child(Some(&options_box));
+
+        // vexpand so the buttons stay at the bottom of the window
+        let form = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .vexpand(true)
+            .build();
+        form.append(&remote_frame);
+        form.append(&branches_frame);
+        form.append(&options_frame);
 
         // ---- buttons -----------------------------------------------------------
         let cancel_button = gtk::Button::builder()

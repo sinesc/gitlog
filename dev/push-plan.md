@@ -48,17 +48,22 @@ Argument construction (in the binary):
 
 ## 3. UI layout (in `src/bin/gitpush.rs`)
 
-Simple form window (no panes), default ~720x420:
+Simple form window (no panes); default *width* ~720, no default height —
+the window fits tightly around the content. The form is grouped into
+three labelled `GtkFrame` sections (Remote / Branches / Push options):
 
 ```
 Window  title: "git push - <branch>"
 └─ Box(vertical)
-   ├─ CheckButton  "Push all branches"
-   ├─ Box(horizontal): Label "Remote"   > ComboBoxText
-   ├─ Box(horizontal): Label "Local branch" > Entry   (prefilled, current branch)
-   ├─ Box(horizontal): Label "Remote branch" > Entry  (empty = same name)
-   ├─ Box(horizontal): CheckButton "Force"   | CheckButton "Force with lease"
-   ├─ Box(horizontal): CheckButton "Include tags" | CheckButton "Set upstream branch"
+   ├─ Frame "Remote"
+   │  └─ ComboBoxText
+   ├─ Frame "Branches"
+   │  ├─ CheckButton  "Push all branches"
+   │  ├─ Box(horizontal): Label "Local branch" > Entry   (prefilled, current branch)
+   │  └─ Box(horizontal): Label "Remote branch" > Entry  (empty = same name)
+   ├─ Frame "Push options"
+   │  ├─ Box(horizontal): CheckButton "Force"   | CheckButton "Force with lease"
+   │  └─ Box(horizontal): CheckButton "Include tags" | CheckButton "Set upstream branch"
    └─ Box(horizontal, end-aligned): Button "Cancel" | Button "Push" (suggested-action)
 ```
 
@@ -105,8 +110,10 @@ New keys (en values):
 
 ```json
 "push.title":           "git push - %{branch}",
+"push.group.remote":    "Remote",
+"push.group.branches":  "Branches",
+"push.group.options":   "Push options",
 "push.all_branches":    "Push all branches",
-"push.remote":          "Remote",
 "push.all_remotes":     "All remotes",
 "push.local_branch":    "Local branch",
 "push.remote_branch":   "Remote branch",
@@ -119,8 +126,8 @@ New keys (en values):
 "error.push_failed":    "Push failed: %{error}"
 ```
 
-- Translate into all 7 locale files (each file goes 29 → 42 keys, must stay
-  in lockstep — the existing tests only check per-locale resolution).
+- Translate into all 7 locale files (each file goes 29 → 46 keys, must
+  stay in lockstep — the existing tests only check per-locale resolution).
 - Test (gitcommit pattern): `push.title` resolves in every locale.
 
 ## 7. Tests
@@ -196,6 +203,10 @@ all branches, all remotes, error path (push to a bare repo with
 - `remotes_to_push` is a `Vec<String>` owned by the thread (a `Vec<&str>`
   borrowed from the click closure does not outlive the handler).
 - `git remote` output is alphabetical; the combo follows that order.
+- The form is three labelled `GtkFrame` groups (Remote / Branches /
+  Push options). The window has a default *width* but no default
+  *height*, so it fits tightly around the content; `vexpand` on the form
+  still pins the buttons to the bottom when the window is resized.
 - `str::as_str()` is unstable on this toolchain: use `&t!(...)` /
   `Cow::as_ref()` instead. gtk-rs 0.11: `ComboBoxText::set_active`
   takes `Option<i32>`, `Dialog::content_area()` is a `Box` (`append`).
