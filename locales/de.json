@@ -50,6 +50,7 @@
   "rebase.email": "E-Mail",
   "rebase.date": "Datum (YYYY-MM-DD HH:MM:SS)",
   "rebase.committer": "Committer",
+  "rebase.name": "Name",
   "rebase.group.details": "Autor & Committer",
   "rebase.message": "Commit-Nachricht",
   "rebase.cancel": "Abbrechen",

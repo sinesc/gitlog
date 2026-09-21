@@ -48,9 +48,6 @@ fn person_row(
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
-        .margin_start(8)
-        .margin_end(8)
-        .margin_bottom(4)
         .build();
     let make = |ph: &str| {
         let e = gtk::Entry::builder().hexpand(true).build();
@@ -154,12 +151,31 @@ fn main() -> ExitCode {
         window.set_application(Some(app));
 
         // ---- author / committer rows -----------------------------------------
-        let author_ph = t!("rebase.author").into_owned();
+        let name_ph = t!("rebase.name").into_owned();
         let email_ph = t!("rebase.email").into_owned();
         let date_ph = t!("rebase.date").into_owned();
-        let committer_ph = t!("rebase.committer").into_owned();
-        let (a_row, a_name, a_email, a_date) = person_row(&author_ph, &email_ph, &date_ph);
-        let (c_row, c_name, c_email, c_date) = person_row(&committer_ph, &email_ph, &date_ph);
+        let (a_row, a_name, a_email, a_date) = person_row(&name_ph, &email_ph, &date_ph);
+        let (c_row, c_name, c_email, c_date) = person_row(&name_ph, &email_ph, &date_ph);
+        // each row gets a header label so it is clear which fields belong
+        // to the author and which to the committer
+        let person_section = |header: &str, row: &gtk::Box| {
+            let section = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .margin_start(8)
+                .margin_end(8)
+                .build();
+            let label = gtk::Label::builder()
+                .label(header)
+                .xalign(0.0)
+                .margin_bottom(2)
+                .build();
+            label.add_css_class("heading");
+            section.append(&label);
+            section.append(row);
+            section
+        };
+        let a_section = person_section(t!("rebase.author").as_ref(), &a_row);
+        let c_section = person_section(t!("rebase.committer").as_ref(), &c_row);
         a_name.set_text(&details.author);
         a_email.set_text(&details.author_email);
         a_date.set_text(&details.author_date);
@@ -169,12 +185,11 @@ fn main() -> ExitCode {
         // group frame around both rows (same structure/padding as gitpush)
         let details_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .margin_start(8)
-            .margin_end(8)
+            .spacing(8)
             .margin_bottom(8)
             .build();
-        details_box.append(&a_row);
-        details_box.append(&c_row);
+        details_box.append(&a_section);
+        details_box.append(&c_section);
         let details_frame = gtk::Frame::builder()
             .label(t!("rebase.group.details").as_ref())
             .margin_start(8)
