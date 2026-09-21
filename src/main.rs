@@ -145,7 +145,12 @@ impl Ui {
         } else {
             commit.committer.clone()
         };
-        let date = i18n::format_timestamp(commit.timestamp, self.locale);
+        // mark commits whose committer date differs from the author date
+        // (amend, rebase…); the date shown is the author date
+        let mut date = i18n::format_timestamp(commit.timestamp, self.locale);
+        if commit.committer_timestamp != commit.timestamp {
+            date.insert_str(0, "*");
+        }
         // branch tips are marked in the list, e.g. "[master] [origin/master] msg"
         let subject = if commit.branches.is_empty() {
             commit.subject.clone()

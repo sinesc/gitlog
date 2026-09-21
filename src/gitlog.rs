@@ -40,8 +40,11 @@ pub struct Commit {
     pub message: String,
     pub author: String,
     pub committer: String,
-    /// Committer unix timestamp; localized in the UI (see `i18n::format_timestamp`).
+    /// Author unix timestamp; localized in the UI (see `i18n::format_timestamp`).
     pub timestamp: i64,
+    /// Committer unix timestamp; differs from `timestamp` when the commit was
+    /// amended, rebased or produced by a bot (marked with `*` in the list).
+    pub committer_timestamp: i64,
     pub files: Vec<FileStat>,
 }
 
@@ -754,7 +757,7 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
     // spotted at a glance
     let tips = branch_tips(repo);
     let pretty =
-        format!("{MARK}%h{SEP}%H{SEP}%an <%ae>{SEP}%cn <%ce>{SEP}%at{SEP}%s{SEP}%B");
+        format!("{MARK}%h{SEP}%H{SEP}%an <%ae>{SEP}%cn <%ce>{SEP}%at{SEP}%ct{SEP}%s{SEP}%B");
     let mut child = match git(
         repo,
         &[
@@ -778,7 +781,8 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
     let mut line = String::new();
 
     // record in flight
-    let mut pending: Option<(String, String, String, String, i64)> = None; // short-hash, full-hash, author, committer, ts
+    let mut pending: Option<(String, String, String, String, i64, i64)> =
+        None; // short-hash, full-hash, author, committer, author-ts, committer-ts
     let mut subject = String::new();
     let mut message: Vec<String> = Vec::new();
     let mut files: Vec<FileStat> = Vec::new();
@@ -787,13 +791,13 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
 
     let mut send = |c: Commit| on_commit(c);
 
-    let mut flush = |pending: &mut Option<(String, String, String, String, i64)>,
+    let mut flush = |pending: &mut Option<(String, String, String, String, i64, i64)>,
                     subject: &str,
                     message: &mut Vec<String>,
                     files: &mut Vec<FileStat>,
                     actions: &mut VecDeque<Action>|
      -> bool {
-        if let Some((hash, full, author, committer, ts)) = pending.take() {
+        if let Some((hash, full, author, committer, ts, cts)) = pending.take() {
             let branches = tips.get(&full).cloned().unwrap_or_default();
             let commit = Commit {
                 hash,
@@ -805,6 +809,7 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
                 author,
                 committer,
                 timestamp: ts,
+                committer_timestamp: cts,
                 files: std::mem::take(files),
             };
             actions.clear();
@@ -840,8 +845,9 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
                 break;
             }
             let fields: Vec<&str> = rest.split(SEP).collect();
-            // fields: 0=short-hash 1=full-hash 2=author 3=committer 4=timestamp 5=subject 6=%B body
-            if fields.len() < 7 {
+            // fields: 0=short-hash 1=full-hash 2=author 3=committer 4=author-ts
+            //         5=committer-ts 6=subject 7=%B body
+            if fields.len() < 8 {
                 continue;
             }
             pending = Some((
@@ -850,9 +856,10 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
                 fields[2].to_string(),
                 fields[3].to_string(),
                 fields[4].parse().unwrap_or(0),
+                fields[5].parse().unwrap_or(0),
             ));
-            subject = fields[5].to_string();
-            message = vec![fields[6].to_string()];
+            subject = fields[6].to_string();
+            message = vec![fields[7].to_string()];
             continue;
         }
 
@@ -990,7 +997,8 @@ mod tests {
         assert_eq!(c.files[0].action, Action::Renamed);
         assert_eq!(c.files[0].added, Some(0));
         assert_eq!(c.files[0].deleted, Some(0));
-        assert!(c.timestamp > 0); // committer time, not a formatted string
+        assert!(c.timestamp > 0); // author time, not a formatted string
+        assert_eq!(c.committer_timestamp, c.timestamp); // not amended/rebased
 
         // second commit: modify + delete, not at any branch tip
         let c = &commits[1];
