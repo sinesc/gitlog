@@ -46,8 +46,8 @@ target/release/gitpush [/path/to/project]     # push window
 target/release/gitrebase [/path/to/project] <commit-hash>   # edit commit details
 ```
 
-`gitrebase` is also opened from `gitlog` by right-clicking a commit in the
-commit list and choosing *Edit commit details*.
+`gitrebase` is also opened from `gitlog` by double-clicking a commit in the
+commit list.
 
 ## Features
 
@@ -60,6 +60,8 @@ commit list and choosing *Edit commit details*.
     commit, and the action (added / modified / deleted / renamed).
 - Opens the window immediately with a loading indicator; history is parsed
   in a background thread from a single `git log --raw --numstat` pass.
+- Press F5 to refresh the commit list (picks up new commits and branch
+  movements; the old load is cancelled first).
 - Closing the window while the history is still loading cancels the load
   safely.
 
@@ -82,7 +84,7 @@ commit list and choosing *Edit commit details*.
     `dev/rebase-concept.md`): edits author/committer (name, e-mail, date) and
     the message of one commit; HEAD commits are amended, other commits are
     rewritten via a stopped non-interactive `git rebase -i`. Opened from the
-    `gitlog` commit list's context menu.
+    `gitlog` commit list by double-clicking a commit.
 - File sizes are fetched lazily per selected commit via
   `git ls-tree -r -l` and cached.
 - Unit-tested git parsers: `cargo test`.

@@ -287,8 +287,11 @@ fn main() -> ExitCode {
 
         // ---- shared state ----------------------------------------------------
         // commit channel: the only sender lives in the load thread, so the
-        // Disconnected error tells us when the load is finished
-        let (commit_tx, commit_rx) = std::sync::mpsc::channel::<Msg>();
+        // Disconnected error tells us when the load is finished. The receiver
+        // (and the load itself) can be replaced on refresh (F5).
+        let commit_rx_slot: Arc<Mutex<Option<std::sync::mpsc::Receiver<Msg>>>> =
+            Arc::new(Mutex::new(None));
+        let load_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>> = Arc::new(Mutex::new(None));
         // size channel: senders are cloned into selection handlers, long-lived
         let (size_tx, size_rx) = std::sync::mpsc::channel::<Msg>();
         let ui = Arc::new(Ui {
@@ -609,26 +612,73 @@ fn main() -> ExitCode {
             });
         }
 
-        // ---- start background load ---------------------------------------------
-        let cancel = Arc::new(AtomicBool::new(false));
+        // ---- background load (restarted on F5) ---------------------------------
+        let start_load: Arc<dyn Fn()> = Arc::new({
+            let ui = Arc::clone(&ui);
+            let repo = repo.clone();
+            let commit_rx_slot = Arc::clone(&commit_rx_slot);
+            let load_cancel = Arc::clone(&load_cancel);
+            move || {
+                // stop the previous load (if any): its sender then hits a
+                // closed channel, and the reader loop sees the cancel flag
+                if let Some(c) = load_cancel.lock().unwrap().take() {
+                    c.store(true, Ordering::Relaxed);
+                }
+                // start from an empty list
+                ui.log_store.clear();
+                ui.commits.lock().unwrap().clear();
+                ui.sizes.lock().unwrap().clear();
+                *ui.selected_hash.lock().unwrap() = None;
+                let (commit_tx, commit_rx) = std::sync::mpsc::channel::<Msg>();
+                *commit_rx_slot.lock().unwrap() = Some(commit_rx);
+                let cancel = Arc::new(AtomicBool::new(false));
+                *load_cancel.lock().unwrap() = Some(cancel.clone());
+                let repo = repo.clone();
+                std::thread::spawn(move || {
+                    gl::load_commits(
+                        &repo,
+                        &cancel,
+                        move |commit| commit_tx.send(Msg::Commit(commit)).is_ok(),
+                    );
+                });
+            }
+        });
+        // F5: refresh the commit list
         {
-            let cancel = Arc::clone(&cancel);
+            let start_load = Arc::clone(&start_load);
+            let key_ctrl = gtk::EventControllerKey::new();
+            key_ctrl.connect_key_pressed(move |_ctrl, keyval, _code, _mods| {
+                if keyval == gtk::gdk::Key::F5 {
+                    start_load();
+                }
+                // let the key propagate (nothing else binds F5)
+                glib::Propagation::Proceed
+            });
+            window.add_controller(key_ctrl);
+        }
+        {
+            let load_cancel = Arc::clone(&load_cancel);
             window.connect_destroy(move |_| {
-                cancel.store(true, Ordering::Relaxed);
+                if let Some(c) = load_cancel.lock().unwrap().take() {
+                    c.store(true, Ordering::Relaxed);
+                }
             });
         }
         {
-            let commit_rx = Arc::new(Mutex::new(commit_rx));
+            let commit_rx_slot = Arc::clone(&commit_rx_slot);
             let size_rx = Arc::new(Mutex::new(size_rx));
             let ui = Arc::clone(&ui);
             let win = window.clone();
+            let repo = repo.clone();
             let repo_name = repo_name.clone();
-            let branch = branch.clone();
             let log_scroll = log_scroll.clone();
             let _id = glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-                let rx = commit_rx.lock().unwrap();
-                loop {
-                    match rx.try_recv() {
+                {
+                    let mut slot = commit_rx_slot.lock().unwrap();
+                    if let Some(rx) = slot.as_ref() {
+                        let mut done = false;
+                        loop {
+                            match rx.try_recv() {
                         Ok(Msg::Commit(commit)) => {
                             let first = ui.commits.lock().unwrap().is_empty();
                             ui.insert_commit(commit);
@@ -652,19 +702,26 @@ fn main() -> ExitCode {
                                 );
                             }
                         }
-                        Ok(_) => break,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            // background load finished
-                            let n = ui.commits.lock().unwrap().len();
-                            win.set_title(Some(&t!(
-                                "title.done",
-                                repo = &repo_name,
-                                branch = &branch,
-                                count = n
-                            )));
-                            break;
+                                Ok(_) => break,
+                                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                    // background load finished
+                                    let n = ui.commits.lock().unwrap().len();
+                                    win.set_title(Some(&t!(
+                                        "title.done",
+                                        repo = &repo_name,
+                                        branch = &gl::head_info(&repo),
+                                        count = n
+                                    )));
+                                    done = true;
+                                    break;
+                                }
+                                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                            }
                         }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        // drop the dead receiver so it is not polled again
+                        if done {
+                            *slot = None;
+                        }
                     }
                 }
                 let rx = size_rx.lock().unwrap();
@@ -680,16 +737,7 @@ fn main() -> ExitCode {
                 glib::ControlFlow::Continue
             });
         }
-        {
-            let repo = repo.clone();
-            std::thread::spawn(move || {
-                gl::load_commits(
-                    &repo,
-                    &cancel,
-                    move |commit| commit_tx.send(Msg::Commit(commit)).is_ok(),
-                );
-            });
-        }
+        start_load();
 
         window.show();
     });
