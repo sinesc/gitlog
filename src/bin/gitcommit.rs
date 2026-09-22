@@ -3,6 +3,8 @@
 //! Two vertically stacked panes - a commit message text area with an
 //! "Amend last commit" checkbox on top, and a checkable file list (stage
 //! checkbox, name, status, +/- lines) below - plus Cancel/Commit buttons.
+//! Double-clicking a file opens its changes (HEAD vs. working tree) in meld,
+//! the same way gitlog's file list opens the changes of a commit.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -46,6 +48,18 @@ fn num_str(n: Option<i64>) -> String {
         Some(n) => n.to_string(),
         None => "•".into(),
     }
+}
+
+/// Writes the content of `path` at `rev` to `dest` (empty file if it does
+/// not exist there, i.e. the file was added or deleted on that side).
+fn write_blob(repo: &Path, rev: &str, path: &str, dest: &Path) {
+    let Ok(out) = std::process::Command::new("git")
+        .args(["-C", &repo.to_string_lossy().into_owned(), "show", &format!("{rev}:{path}")])
+        .output()
+    else {
+        return;
+    };
+    let _ = std::fs::write(dest, &out.stdout);
 }
 
 /// File rows for amend mode: the files of the previous commit merged with
@@ -267,6 +281,52 @@ fn main() -> ExitCode {
             .build();
         files_scroll.set_overlay_scrolling(false);
         files_scroll.set_child(Some(&files_tree));
+
+        // ---- double-click a file: open its changes in meld ----------------------
+        // The list shows the working tree against HEAD (that is also where
+        // the +/- counts come from), so meld compares the HEAD version with
+        // the current working-tree file (same pattern as gitlog's file list).
+        {
+            let store = files_store.clone();
+            let repo = repo.clone();
+            files_tree.connect_row_activated(move |_tree, path, _column| {
+                let Some(iter) = store.iter(path) else {
+                    return;
+                };
+                let name: String = store.get(&iter, W_NAME as i32);
+                // rename rows are displayed as "old => new"
+                let new_path = name.rsplit("=>").next().unwrap_or(&name).trim();
+                let old_path = name.split("=>").next().unwrap_or(&name).trim();
+                // temp files per process; left in the temp dir for the
+                // lifetime of the meld instance
+                let dir = std::env::temp_dir()
+                    .join(format!("gitcommit-{}", std::process::id()));
+                if std::fs::create_dir_all(&dir).is_err() {
+                    return;
+                }
+                // flatten the full path so different files with the same
+                // base name do not overwrite each other's temp copies
+                let tag: String = new_path
+                    .chars()
+                    .map(|c| if c == '/' { '-' } else { c })
+                    .collect();
+                let old_file = dir.join(format!("{tag}.old"));
+                let new_file = dir.join(format!("{tag}.new"));
+                // HEAD version (empty for files not in HEAD, e.g. new files)
+                write_blob(&repo, "HEAD", old_path, &old_file);
+                // working-tree version (empty for deleted files)
+                let _ = std::fs::write(
+                    &new_file,
+                    std::fs::read(repo.join(new_path)).unwrap_or_default(),
+                );
+                if let Err(e) = std::process::Command::new("meld")
+                    .args([&old_file, &new_file])
+                    .spawn()
+                {
+                    eprintln!("gitcommit: cannot open meld: {e}");
+                }
+            });
+        }
 
         // ---- message pane + amend checkbox -----------------------------------
         let message_view = gtk::TextView::builder()
