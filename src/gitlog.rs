@@ -255,10 +255,21 @@ fn numstat_map(repo: &Path, args: &[&str]) -> HashMap<String, (Option<i64>, Opti
     map
 }
 
-/// Untracked files (from `git status --porcelain=v1`).
+/// Untracked files (from `git status --porcelain=v1 -uall`).
+/// `-uall` matters: with the default `-unormal` git collapses a directory
+/// whose content is entirely untracked into a single `dir/` entry, so the
+/// commit window would show the folder instead of the files inside it.
 fn untracked_files(repo: &Path) -> Vec<String> {
     let Ok(output) = Command::new("git")
-        .args(["-C", &repo.to_string_lossy(), "-c", "core.quotepath=false", "status", "--porcelain=v1"])
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "-c",
+            "core.quotepath=false",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ])
         .output()
     else {
         return Vec::new();
@@ -1075,12 +1086,13 @@ mod tests {
         git(&dir, &["add", "-A", "--", "a.txt"]);
         std::fs::remove_file(dir.join("b2.txt")).unwrap();
         write(&dir, "new.txt", "fresh\n");
+        write(&dir, "sub/deep/new2.txt", "fresh2\n"); // untracked in a new folder
 
         let files = worktree_changes(&dir);
         let by_name = |name: &str| files.iter().find(|f| f.path == name).unwrap_or_else(|| {
             panic!("{name} not in worktree_changes: {files:?}")
         });
-        assert_eq!(files.len(), 3);
+        assert_eq!(files.len(), 4);
         let a = by_name("a.txt");
         assert_eq!(a.action, Action::Modified);
         assert_eq!(a.added, Some(1));
@@ -1096,6 +1108,11 @@ mod tests {
         assert_eq!((n.added, n.deleted), (None, None)); // no diff for untracked
         assert!(!n.staged);
         assert!(!n.in_head);
+        // untracked files inside a brand-new folder are listed individually,
+        // not collapsed into a "sub/deep/" directory entry
+        let d = by_name("sub/deep/new2.txt");
+        assert_eq!(d.action, Action::Added);
+        assert!(!d.in_head);
 
         // previous commit: the rename, shown as "old => new" with the new path
         let head = head_files(&dir).expect("head_files");
