@@ -87,4 +87,6 @@ commit list.
     `gitlog` commit list by double-clicking a commit.
 - File sizes are fetched lazily per selected commit via
   `git ls-tree -r -l` and cached.
-- Unit-tested git parsers: `cargo test`.
+- Integration tests for the git layer, the locale handling and the
+  translated strings: `cargo test` (test files under `tests/`, shared
+  fixtures in `tests/common/mod.rs`).

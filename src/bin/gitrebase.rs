@@ -19,26 +19,6 @@ rust_i18n::i18n!("locales", fallback = "en");
 use gitlog::gitlog as gl;
 use gitlog::i18n;
 
-/// Structural check of "YYYY-MM-DD HH:MM:SS" (the values themselves are not
-/// checked - git rejects dates that do not exist).
-fn is_date_string(s: &str) -> bool {
-    let b = s.as_bytes();
-    if b.len() != 19 {
-        return false;
-    }
-    (0..4).all(|i| b[i].is_ascii_digit())
-        && b[4] == b'-'
-        && (5..7).all(|i| b[i].is_ascii_digit())
-        && b[7] == b'-'
-        && (8..10).all(|i| b[i].is_ascii_digit())
-        && b[10] == b' '
-        && (11..13).all(|i| b[i].is_ascii_digit())
-        && b[13] == b':'
-        && (14..16).all(|i| b[i].is_ascii_digit())
-        && b[16] == b':'
-        && (17..19).all(|i| b[i].is_ascii_digit())
-}
-
 /// One "name + e-mail + date" row of editable entries.
 fn person_row(
     name_ph: &str,
@@ -283,7 +263,7 @@ fn main() -> ExitCode {
                 }
                 let author_date = entry_text(a_date);
                 let committer_date = entry_text(c_date);
-                if !is_date_string(&author_date) || !is_date_string(&committer_date) {
+                if !gl::is_date_string(&author_date) || !gl::is_date_string(&committer_date) {
                     error_dialog(&win, &t!("error.invalid_date"));
                     return;
                 }
@@ -310,38 +290,4 @@ fn main() -> ExitCode {
     // not be interpreted by GApplication as files to open (same as gitlog)
     let prog = env::args().next().unwrap_or_default();
     ExitCode::from(app.run_with_args(&[prog]).get())
-}
-
-#[cfg(test)]
-mod rebase_date_tests {
-    use super::is_date_string;
-
-    #[test]
-    fn date_structure() {
-        assert!(is_date_string("2026-09-20 17:36:12"));
-        assert!(!is_date_string(""));
-        assert!(!is_date_string("2026/09/20 17:36:12"));
-        assert!(!is_date_string("2026-09-20T17:36:12"));
-        assert!(!is_date_string("2026-09-20 17:36"));
-        assert!(!is_date_string("abcd-ef-gh ij:kl:mn"));
-    }
-}
-
-#[cfg(test)]
-mod rebase_title_tests {
-    // Verify the new strings resolve in every locale without touching the
-    // global locale (same pattern as the gitlog i18n tests).
-
-    #[test]
-    fn rebase_title_resolves_in_every_locale() {
-        let hash = "5f5d34f";
-        let expected = "git rebase - 5f5d34f";
-        assert_eq!(rust_i18n::t!("rebase.title", locale = "en", hash = &hash), expected);
-        assert_eq!(rust_i18n::t!("rebase.title", locale = "de", hash = &hash), expected);
-        assert_eq!(rust_i18n::t!("rebase.title", locale = "fr", hash = &hash), expected);
-        assert_eq!(rust_i18n::t!("rebase.title", locale = "es", hash = &hash), expected);
-        assert_eq!(rust_i18n::t!("rebase.title", locale = "it", hash = &hash), expected);
-        assert_eq!(rust_i18n::t!("rebase.title", locale = "nl", hash = &hash), expected);
-        assert_eq!(rust_i18n::t!("rebase.title", locale = "pt", hash = &hash), expected);
-    }
 }

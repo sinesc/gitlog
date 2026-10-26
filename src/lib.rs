@@ -3,3 +3,7 @@
 
 pub mod gitlog;
 pub mod i18n;
+
+// Locale files for the `t!` macro used by the shared code below; the
+// binaries initialize the same set for their own strings.
+rust_i18n::i18n!("locales", fallback = "en");

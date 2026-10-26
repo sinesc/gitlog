@@ -458,21 +458,3 @@ fn main() -> ExitCode {
     let prog = env::args().next().unwrap_or_default();
     ExitCode::from(app.run_with_args(&[prog]).get())
 }
-
-#[cfg(test)]
-mod push_title_tests {
-    // Verify the new strings resolve in every locale without touching the
-    // global locale (same pattern as the gitcommit i18n tests).
-
-    #[test]
-    fn push_title_resolves_in_every_locale() {
-        let branch = "main";
-        assert_eq!(rust_i18n::t!("push.title", locale = "en", branch = &branch), "git push - main");
-        assert_eq!(rust_i18n::t!("push.title", locale = "de", branch = &branch), "git push - main");
-        assert_eq!(rust_i18n::t!("push.title", locale = "fr", branch = &branch), "git push - main");
-        assert_eq!(rust_i18n::t!("push.title", locale = "es", branch = &branch), "git push - main");
-        assert_eq!(rust_i18n::t!("push.title", locale = "it", branch = &branch), "git push - main");
-        assert_eq!(rust_i18n::t!("push.title", locale = "nl", branch = &branch), "git push - main");
-        assert_eq!(rust_i18n::t!("push.title", locale = "pt", branch = &branch), "git push - main");
-    }
-}

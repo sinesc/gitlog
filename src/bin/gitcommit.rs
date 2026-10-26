@@ -62,37 +62,8 @@ fn write_blob(repo: &Path, rev: &str, path: &str, dest: &Path) {
     let _ = std::fs::write(dest, &out.stdout);
 }
 
-/// File rows for amend mode: the files of the previous commit merged with
-/// the working-copy changes; everything is pre-checked (a file the user
-/// unchecks leaves the amended commit).
-fn amend_files(repo: &Path) -> Vec<gl::WorkFile> {
-    let mut files = gl::head_files(repo).unwrap_or_default();
-    for w in gl::worktree_changes(repo) {
-        // a rename row carries the *new* path: also match the head row of
-        // the old path, otherwise the file appears twice (once from the
-        // previous commit, once as "old => new") and committing fails
-        // because the old path no longer exists
-        let old_path = w.display_name.split("=>").next().unwrap_or("").trim();
-        let is_rename = w.action == gl::Action::Renamed;
-        match files
-            .iter_mut()
-            .find(|f| f.path == w.path || (is_rename && f.path == old_path))
-        {
-            // changed in the work tree: keep the "in head" flag, show the
-            // current diff against HEAD
-            Some(h) => {
-                h.path = w.path.clone();
-                h.display_name = w.display_name;
-                h.action = w.action;
-                h.added = w.added;
-                h.deleted = w.deleted;
-            }
-            None => files.push(w),
-        }
-    }
-    files
-}
-
+/// Appends one row per file to the file list; `precheck` decides the initial
+/// state of the stage checkbox.
 fn add_file_rows(
     store: &gtk::ListStore,
     files: &[gl::WorkFile],
@@ -124,45 +95,19 @@ fn buffer_text(buffer: &gtk::TextBuffer) -> String {
         .to_string()
 }
 
-type Row = (String, bool, bool, bool); // path, checked, in_head, staged
-
-fn read_rows(store: &gtk::ListStore) -> Vec<Row> {
+fn read_rows(store: &gtk::ListStore) -> Vec<gl::StageRow> {
     let mut rows = Vec::new();
     let mut iter = store.iter_first();
     while let Some(mut i) = iter {
-        rows.push((
-            store.get(&i, W_PATH as i32),
-            store.get(&i, W_STAGE as i32),
-            store.get(&i, W_IN_HEAD as i32),
-            store.get(&i, W_STAGED as i32),
-        ));
+        rows.push(gl::StageRow {
+            path: store.get(&i, W_PATH as i32),
+            checked: store.get(&i, W_STAGE as i32),
+            in_head: store.get(&i, W_IN_HEAD as i32),
+            staged: store.get(&i, W_STAGED as i32),
+        });
         iter = store.iter_next(&mut i).then_some(i);
     }
     rows
-}
-
-/// Applies the checkbox selection to the index and creates the commit.
-/// On error the index may be partially updated, which the user can inspect
-/// and repair; the window stays open.
-fn commit_checked(repo: &Path, rows: &[Row], amend: bool, message: &str) -> Result<(), String> {
-    for (path, checked, in_head, staged) in rows {
-        if amend {
-            if *in_head && !*checked {
-                // remove from the amended commit, keep the work tree file
-                gl::rm_cached_path(repo, path)?;
-            } else if *checked {
-                gl::stage_path(repo, path)?;
-            }
-        } else if *checked && !*staged {
-            gl::stage_path(repo, path)?;
-        } else if !*checked && *staged {
-            gl::unstage_path(repo, path)?;
-        }
-    }
-    if !amend && gl::index_matches_head(repo) {
-        return Err(t!("error.nothing_staged").into_owned());
-    }
-    gl::do_commit(repo, message, amend)
 }
 
 fn error_dialog(parent: &gtk::Window, text: &str) {
@@ -411,7 +356,7 @@ fn main() -> ExitCode {
                             buffer.set_text(&m);
                         }
                     }
-                    add_file_rows(&store, &amend_files(&repo), |_| true);
+                    add_file_rows(&store, &gl::amend_files(&repo), |_| true);
                 } else {
                     // back to a normal commit: drop the pre-filled message
                     buffer.set_text("");
@@ -446,7 +391,7 @@ fn main() -> ExitCode {
                 }
                 let rows = read_rows(&store);
                 let amend = amend_check.is_active();
-                match commit_checked(&repo, &rows, amend, &message) {
+                match gl::commit_checked(&repo, &rows, amend, &message) {
                     Ok(()) => win.close(),
                     Err(e) => error_dialog(&win, &t!("error.commit_failed", error = &e)),
                 }
@@ -464,140 +409,4 @@ fn main() -> ExitCode {
     // interpreted by GApplication as a file to open (same as gitlog)
     let prog = env::args().next().unwrap_or_default();
     ExitCode::from(app.run_with_args(&[prog]).get())
-}
-
-#[cfg(test)]
-mod commit_title_tests {
-    // Verify the new strings resolve in every locale without touching the
-    // global locale (same pattern as the gitlog i18n tests).
-
-    #[test]
-    fn commit_title_resolves_in_every_locale() {
-        let branch = "main";
-        assert_eq!(rust_i18n::t!("commit.title", locale = "en", branch = &branch), "git commit - main");
-        assert_eq!(rust_i18n::t!("commit.title", locale = "de", branch = &branch), "git commit - main");
-        assert_eq!(rust_i18n::t!("commit.title", locale = "fr", branch = &branch), "git commit - main");
-        assert_eq!(rust_i18n::t!("commit.title", locale = "es", branch = &branch), "git commit - main");
-        assert_eq!(rust_i18n::t!("commit.title", locale = "it", branch = &branch), "git commit - main");
-        assert_eq!(rust_i18n::t!("commit.title", locale = "nl", branch = &branch), "git commit - main");
-        assert_eq!(rust_i18n::t!("commit.title", locale = "pt", branch = &branch), "git commit - main");
-    }
-}
-
-#[cfg(test)]
-mod amend_files_tests {
-    use super::*;
-    use std::process::Command;
-
-    fn test_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "gitcommit-test-{}-{}",
-            std::process::id(),
-            tag
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn git(repo: &Path, args: &[&str]) {
-        let out = Command::new("git")
-            .args(["-C", &repo.to_string_lossy()])
-            .args(args)
-            .output()
-            .expect("failed to run git");
-        assert!(
-            out.status.success(),
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    #[test]
-    fn amend_files_merges_head_and_worktree() {
-        let dir = test_dir("merge");
-        git(&dir, &["init", "-q", "-b", "main"]);
-        git(&dir, &["config", "user.email", "t@t.t"]);
-        git(&dir, &["config", "user.name", "Tester"]);
-        std::fs::write(dir.join("a.txt"), "line1\nline2\n").unwrap();
-        std::fs::write(dir.join("b.txt"), "x\n").unwrap();
-        git(&dir, &["add", "-A"]);
-        git(&dir, &["commit", "-qm", "first"]);
-
-        // working copy: a.txt +1 line, new.txt untracked
-        std::fs::write(dir.join("a.txt"), "line1\nline2\nline3\n").unwrap();
-        std::fs::write(dir.join("new.txt"), "fresh\n").unwrap();
-
-        let files = amend_files(&dir);
-        assert_eq!(files.len(), 3);
-        // a file in HEAD that changed in the work tree: merged, keeps in_head
-        let a = files.iter().find(|f| f.path == "a.txt").expect("a.txt");
-        assert_eq!(a.action, gl::Action::Modified);
-        assert_eq!(a.added, Some(1));
-        assert!(a.in_head);
-        // unchanged file from HEAD
-        let b = files.iter().find(|f| f.path == "b.txt").expect("b.txt");
-        assert_eq!(b.action, gl::Action::Added);
-        assert!(b.in_head);
-        // untracked work tree file
-        let n = files.iter().find(|f| f.path == "new.txt").expect("new.txt");
-        assert!(!n.in_head);
-    }
-
-    #[test]
-    fn amend_files_merges_rename_of_head_file() {
-        let dir = test_dir("merge-rename");
-        git(&dir, &["init", "-q", "-b", "main"]);
-        git(&dir, &["config", "user.email", "t@t.t"]);
-        git(&dir, &["config", "user.name", "Tester"]);
-        std::fs::write(dir.join("x.txt"), "line1\n").unwrap();
-        git(&dir, &["add", "-A"]);
-        git(&dir, &["commit", "-qm", "first"]);
-
-        // rename after the commit: must show as a single "old => new" row,
-        // not as a head row for the old path plus a rename row
-        git(&dir, &["mv", "x.txt", "y.txt"]);
-        let files = amend_files(&dir);
-        assert_eq!(files.len(), 1);
-        let r = &files[0];
-        assert_eq!(r.path, "y.txt");
-        assert_eq!(r.display_name, "x.txt => y.txt");
-        assert_eq!(r.action, gl::Action::Renamed);
-        assert!(r.in_head);
-    }
-
-    #[test]
-    fn amend_rename_commit_flow() {
-        let dir = test_dir("rename-flow");
-        git(&dir, &["init", "-q", "-b", "main"]);
-        git(&dir, &["config", "user.email", "t@t.t"]);
-        git(&dir, &["config", "user.name", "Tester"]);
-        // parent commit so the amended commit's diff shows the rename
-        std::fs::write(dir.join("z.txt"), "z\n").unwrap();
-        git(&dir, &["add", "-A"]);
-        git(&dir, &["commit", "-qm", "first"]);
-        std::fs::write(dir.join("x.txt"), "line1\n").unwrap();
-        git(&dir, &["add", "-A"]);
-        git(&dir, &["commit", "-qm", "second"]);
-        git(&dir, &["mv", "x.txt", "y.txt"]);
-
-        // the single merged row is checked; committing must not fail on the
-        // old path anymore
-        let files = amend_files(&dir);
-        assert_eq!(files.len(), 1);
-        commit_checked(
-            &dir,
-            &[(files[0].path.clone(), true, files[0].in_head, files[0].staged)],
-            true,
-            "amended with rename",
-        )
-        .unwrap();
-        let head = gl::head_files(&dir).expect("head_files after amend");
-        assert_eq!(head.len(), 1);
-        assert_eq!(head[0].path, "y.txt");
-        // x.txt only existed in the amended-away commit, so relative to the
-        // parent the file is a plain add (no rename to show)
-        assert_eq!(head[0].action, gl::Action::Added);
-    }
 }
