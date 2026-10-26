@@ -12,7 +12,7 @@
   "action.modified": "gewijzigd",
   "action.deleted": "verwijderd",
   "action.renamed": "hernoemd",
-  "filter.placeholder": "Filteren op commitbericht…",
+  "filter.placeholder": "Filteren op bericht, hash, auteur of committer…",
   "status.loading": "Commitgeschiedenis laden…",
   "title.loading": "git log - %{repo} - %{branch} - wordt geladen…",
   "title.done": "git log - %{repo} - %{branch} - %{count} commits",

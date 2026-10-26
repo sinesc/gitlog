@@ -12,7 +12,7 @@
   "action.modified": "modificado",
   "action.deleted": "eliminado",
   "action.renamed": "renombrado",
-  "filter.placeholder": "Filtrar por mensaje de commit…",
+  "filter.placeholder": "Filtrar por mensaje, hash, autor o committer…",
   "status.loading": "Cargando historial de commits…",
   "title.loading": "git log - %{repo} - %{branch} - cargando…",
   "title.done": "git log - %{repo} - %{branch} - %{count} commits",

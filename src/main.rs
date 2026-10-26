@@ -22,6 +22,7 @@ const LOG_COMMITTER: u32 = 2;
 const LOG_DATE: u32 = 3;
 const LOG_IDX: u32 = 4; // index into the commit cache (hidden)
 const LOG_TIP: u32 = 5; // 1 if the commit is a branch tip (hidden)
+const LOG_SEARCH: u32 = 6; // lowercase "hash subject author committer" for the filter (hidden)
 
 const F_NAME: u32 = 0;
 const F_ADDED: u32 = 1;
@@ -151,6 +152,14 @@ impl Ui {
         if commit.committer_timestamp != commit.timestamp {
             date.insert_str(0, "*");
         }
+        // searchable text for the filter: hash, subject and author/committer
+        // (which carry name and email), all lowercase for a case-insensitive
+        // match against the lowercased query
+        let search = format!(
+            "{} {} {} {}",
+            commit.hash, commit.subject, commit.author, commit.committer
+        )
+        .to_lowercase();
         // branch tips are marked in the list, e.g. "[master] [origin/master] msg"
         let subject = if commit.branches.is_empty() {
             commit.subject.clone()
@@ -171,6 +180,7 @@ impl Ui {
                 (LOG_DATE, &date),
                 (LOG_IDX, &idx),
                 (LOG_TIP, &i32::from(!commit.branches.is_empty())),
+                (LOG_SEARCH, &search),
             ],
         );
         self.commits.lock().unwrap().push(commit);
@@ -310,6 +320,7 @@ fn main() -> ExitCode {
                 glib::Type::STRING,
                 glib::Type::I64,
                 glib::Type::I32,
+                glib::Type::STRING,
             ]),
             log_tree: gtk::TreeView::builder().build(),
             log_subject_cell: gtk::CellRendererText::new(),
@@ -537,12 +548,12 @@ fn main() -> ExitCode {
             log_filter.set_visible_func(move |model, iter| {
                 // The filter may be consulted while a row is being inserted
                 // (before its cells are set), so read tolerantly.
-                let subject: String = model
-                    .get_value(iter, LOG_SUBJECT as i32)
+                let haystack: String = model
+                    .get_value(iter, LOG_SEARCH as i32)
                     .get()
                     .unwrap_or_default();
                 let q = q.borrow();
-                q.is_empty() || subject.to_lowercase().contains(q.as_str())
+                q.is_empty() || haystack.contains(q.as_str())
             });
             let lf = log_filter.clone();
             filter_entry.connect_search_changed(move |entry| {
