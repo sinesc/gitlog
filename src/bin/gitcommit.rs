@@ -6,6 +6,7 @@
 //! Double-clicking a file opens its changes (HEAD vs. working tree) in meld,
 //! the same way gitlog's file list opens the changes of a commit.
 
+use std::collections::HashSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -93,6 +94,20 @@ fn buffer_text(buffer: &gtk::TextBuffer) -> String {
     buffer
         .text(&buffer.start_iter(), &buffer.end_iter(), false)
         .to_string()
+}
+
+/// Re-read the working tree into the file list, keeping the checkbox
+/// selections the user made for files that are still changed. Used after
+/// external edits (meld) so status and +/- counts match the files on disk.
+fn refresh_file_rows(store: &gtk::ListStore, repo: &Path) {
+    let checked: HashSet<String> = read_rows(store)
+        .into_iter()
+        .filter(|r| r.checked)
+        .map(|r| r.path)
+        .collect();
+    add_file_rows(store, &gl::worktree_changes(repo), |f| {
+        f.staged || checked.contains(&f.path)
+    });
 }
 
 fn read_rows(store: &gtk::ListStore) -> Vec<gl::StageRow> {
@@ -242,30 +257,32 @@ fn main() -> ExitCode {
                 // rename rows are displayed as "old => new"
                 let new_path = name.rsplit("=>").next().unwrap_or(&name).trim();
                 let old_path = name.split("=>").next().unwrap_or(&name).trim();
-                // temp files per process; left in the temp dir for the
-                // lifetime of the meld instance
+                // Only the HEAD side needs a temporary copy; the right side
+                // of the comparison is the real working-tree file, so edits
+                // made (and saved) in meld land in the repository.
                 let dir = std::env::temp_dir()
                     .join(format!("gitcommit-{}", std::process::id()));
                 if std::fs::create_dir_all(&dir).is_err() {
                     return;
                 }
                 // flatten the full path so different files with the same
-                // base name do not overwrite each other's temp copies
+                // base name do not overwrite each other's temp copies; keep
+                // the extension so meld picks the right highlighting
                 let tag: String = new_path
                     .chars()
                     .map(|c| if c == '/' { '-' } else { c })
                     .collect();
-                let old_file = dir.join(format!("{tag}.old"));
-                let new_file = dir.join(format!("{tag}.new"));
+                let head_file = match Path::new(new_path).extension().and_then(|e| e.to_str()) {
+                    Some(ext) => dir.join(format!("{tag}.head.{ext}")),
+                    None => dir.join(format!("{tag}.head")),
+                };
                 // HEAD version (empty for files not in HEAD, e.g. new files)
-                write_blob(&repo, "HEAD", old_path, &old_file);
-                // working-tree version (empty for deleted files)
-                let _ = std::fs::write(
-                    &new_file,
-                    std::fs::read(repo.join(new_path)).unwrap_or_default(),
-                );
+                write_blob(&repo, "HEAD", old_path, &head_file);
+                // the real file; for deleted files meld creates it when the
+                // user saves, which restores it in the working tree
+                let work_file = repo.join(new_path);
                 if let Err(e) = std::process::Command::new("meld")
-                    .args([&old_file, &new_file])
+                    .args([&head_file, &work_file])
                     .spawn()
                 {
                     eprintln!("gitcommit: cannot open meld: {e}");
@@ -374,6 +391,21 @@ fn main() -> ExitCode {
             };
             apply(&buffer);
             buffer.connect_changed(move |b| apply(b));
+        }
+
+        {
+            let store = files_store.clone();
+            let amend_check = amend_check.clone();
+            let repo = repo.clone();
+            // meld writes into the working tree, so refresh the row data
+            // (status, +/- counts) whenever the window regains focus
+            let focus = gtk::EventControllerFocus::new();
+            focus.connect_enter(move |_| {
+                if !amend_check.is_active() {
+                    refresh_file_rows(&store, &repo);
+                }
+            });
+            window.add_controller(focus);
         }
 
         // ---- cancel / commit ------------------------------------------------------
