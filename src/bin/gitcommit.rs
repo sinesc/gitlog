@@ -141,6 +141,29 @@ fn read_rows(store: &gtk::ListStore) -> Vec<gl::StageRow> {
     rows
 }
 
+/// True when the list is non-empty and every row is checked.
+fn rows_all_checked(store: &gtk::ListStore) -> bool {
+    let Some(mut i) = store.iter_first() else {
+        return false;
+    };
+    loop {
+        let checked: bool = store.get(&i, W_STAGE as i32);
+        if !checked {
+            return false;
+        }
+        // iter_next advances in place and returns false at the end
+        if !store.iter_next(&mut i) {
+            return true;
+        }
+    }
+}
+
+/// Sync the stage column's header checkbox after row changes; the header
+/// widget is display-only (see the column setup), so no signals to block.
+fn sync_head_checkbox(store: &gtk::ListStore, head: &gtk::CheckButton) {
+    head.set_active(rows_all_checked(store));
+}
+
 fn error_dialog(parent: &gtk::Window, text: &str) {
     let dialog = gtk::MessageDialog::builder()
         .transient_for(parent)
@@ -223,6 +246,16 @@ fn main() -> ExitCode {
         stage_col.add_attribute(&toggle, "active", W_STAGE as i32);
         stage_col.set_sizing(gtk::TreeViewColumnSizing::Fixed);
         stage_col.set_fixed_width(28);
+        // Header checkbox. The TreeView header swallows mouse clicks (a
+        // widget inside the header never receives them), so the check button
+        // is a pure "all rows checked" indicator and the actual toggling is
+        // done by the stage column's own clicked signal (set_clickable); in
+        // GTK 4's TreeView a header click cannot sort the list by itself
+        // (sorting needs an explicitly attached sorter)
+        let head_toggle = gtk::CheckButton::new();
+        head_toggle.set_can_target(false);
+        stage_col.set_widget(Some(&head_toggle));
+        stage_col.set_clickable(true);
         files_tree.append_column(&stage_col);
 
         let name_cell = gtk::CellRendererText::new();
@@ -381,13 +414,40 @@ fn main() -> ExitCode {
         // initial list: working-copy changes vs HEAD, pre-checked if staged
         add_file_rows(&files_store, &gl::worktree_changes(&repo), |f| f.staged);
 
+        // clicking the (small) stage column header checks all rows, or
+        // unchecks all when every row was already checked; store value
+        // changes never re-emit CellRendererToggle::toggled, so the row
+        // handler below is unaffected
         {
             let store = files_store.clone();
+            let head = head_toggle.clone();
+            stage_col.connect_clicked(move |_col| {
+                if store.iter_first().is_none() {
+                    head.set_active(false);
+                    return;
+                }
+                let on = !rows_all_checked(&store);
+                if let Some(mut i) = store.iter_first() {
+                    loop {
+                        store.set(&i, &[(W_STAGE, &on)]);
+                        if !store.iter_next(&mut i) {
+                            break;
+                        }
+                    }
+                }
+                head.set_active(on);
+            });
+        }
+
+        {
+            let store = files_store.clone();
+            let head = head_toggle.clone();
             toggle.connect_toggled(move |_cell, path| {
                 if let Some(row) = store.iter(&path) {
                     let checked: bool = store.get(&row, W_STAGE as i32);
                     store.set(&row, &[(W_STAGE, &!checked)]);
                 }
+                sync_head_checkbox(&store, &head);
             });
         }
 
@@ -395,6 +455,7 @@ fn main() -> ExitCode {
             let store = files_store.clone();
             let buffer = message_view.buffer().clone();
             let repo = repo.clone();
+            let head = head_toggle.clone();
             amend_check.connect_toggled(move |check| {
                 if check.is_active() {
                     // pre-fill the previous commit's message, but never
@@ -410,6 +471,7 @@ fn main() -> ExitCode {
                     buffer.set_text("");
                     add_file_rows(&store, &gl::worktree_changes(&repo), |f| f.staged);
                 }
+                sync_head_checkbox(&store, &head);
             });
         }
 
@@ -428,6 +490,7 @@ fn main() -> ExitCode {
             let store = files_store.clone();
             let amend_check = amend_check.clone();
             let repo = repo.clone();
+            let head = head_toggle.clone();
             // meld writes into the working tree, so refresh the row data
             // (status, +/- counts) whenever the window regains focus
             let focus = gtk::EventControllerFocus::new();
@@ -435,10 +498,13 @@ fn main() -> ExitCode {
                 if !amend_check.is_active() {
                     refresh_file_rows(&store, &repo);
                 }
+                sync_head_checkbox(&store, &head);
             });
             window.add_controller(focus);
         }
 
+        // header checkbox reflects the initial row states
+        sync_head_checkbox(&files_store, &head_toggle);
         // ---- cancel / commit ------------------------------------------------------
         {
             let store = files_store.clone();
