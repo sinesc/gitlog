@@ -1017,3 +1017,194 @@ pub fn load_commits<F: FnMut(Commit) -> bool>(
     }
     let _ = child.wait();
 }
+
+// ---- spreadsheet diffs via LibreOffice Calc ---------------------------------
+//
+// meld cannot show a meaningful diff of ODS/XLSX binaries. LibreOffice Calc has
+// a built-in "Compare Sheets" feature (.uno:CompareDocuments) that marks every
+// changed cell in the document and lists the changes; it is normally driven
+// from a file-picker dialog, but the slot also accepts a URL argument, which a
+// small Basic macro can pass. gitcommit installs that driver macro into the
+// LibreOffice user profile ("My Macros") and starts:
+//
+//   libreoffice <work-file> macro:///Standard.GitcommitDiff.CompareWith(<head-url>)
+//
+// A document argument is required (a lone macro URL is never dispatched).
+// The macro verifies that a Calc document is actually open before it
+// dispatches, because with a first-start profile (Tip-of-the-Day dialog) it
+// can otherwise run before the command-line document finished loading.
+// Verified against LibreOffice 25.8: a running LibreOffice instance picks up
+// newly written Basic modules lazily, so no restart is ever needed.
+
+/// File extensions whose diffs LibreOffice Calc handles better than meld.
+pub fn is_spreadsheet(path: &str) -> bool {
+    // no .ots/.xlt: LibreOffice would open those as templates (new document)
+    matches!(
+        std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("ods") | Some("xlsx") | Some("xlsm") | Some("xls")
+    )
+}
+
+/// Percent-encodes a path as a `file://` URL: the URL travels inside a
+/// command-line macro argument, so blanks, commas, parentheses and URL
+/// syntax characters must not survive literally (LibreOffice decodes them
+/// again when it uses the URL).
+pub fn file_url(p: &Path) -> String {
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(p)
+    };
+    let mut url = String::from("file://");
+    for b in abs.to_string_lossy().as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'.' | b'_' | b'~') {
+            url.push(*b as char);
+        } else {
+            url.push_str(&format!("%{b:02X}"));
+        }
+    }
+    url
+}
+
+/// Basic source of the compare driver (module GitcommitDiff, sub CompareWith).
+/// Kept minimal on purpose: iterating the open components or loading the
+/// document from the macro itself crashes LibreOffice while the command-line
+/// document is still loading, so it only uses a guarded ThisComponent.
+const CALC_DRIVER: &str = "\
+' Driver installed by gitcommit: runs Calc's built-in Compare Sheets on the
+' working copy that gitcommit opened, against the HEAD copy (a file:// URL).
+Sub CompareWith(sOtherUrl As String)
+    Dim oDoc As Object
+    oDoc = ThisComponent
+    If IsNull(oDoc) Or IsEmpty(oDoc) Then Exit Sub
+    If HasUnoInterfaces(oDoc, \"com.sun.star.lang.XServiceInfo\") Then
+        If Not oDoc.supportsService(\"com.sun.star.sheet.SpreadsheetDocument\") Then
+            Exit Sub
+        End If
+    Else
+        Exit Sub
+    End If
+    Dim a(0) As New com.sun.star.beans.PropertyValue
+    a(0).Name = \"URL\"
+    a(0).Value = sOtherUrl
+    Dim oHelper As Object
+    oHelper = CreateUnoService(\"com.sun.star.frame.DispatchHelper\")
+    oHelper.executeDispatch(oDoc.CurrentController.Frame, \".uno:CompareDocuments\", \"\", 0, a())
+End Sub
+";
+
+/// XML-escapes text for a LibreOffice Basic module (.xba) file.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Standard library directory of the LibreOffice user profile ("My Macros").
+/// Only the `basic` container of an already-initialised profile is trusted;
+/// the Standard sub directory is then created on demand by the driver install.
+pub fn lo_standard_lib_dir() -> Option<std::path::PathBuf> {
+    let config = match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(v) if !v.is_empty() => std::path::PathBuf::from(v),
+        _ => {
+            let home = std::env::var_os("HOME")?;
+            std::path::PathBuf::from(home).join(".config")
+        }
+    };
+    // "libreoffice/4" is the profile name of every LibreOffice since 4.x
+    let basic = config.join("libreoffice").join("4").join("user").join("basic");
+    basic.is_dir().then(|| basic.join("Standard"))
+}
+
+/// Writes the driver module into the profile's Standard library and registers
+/// it in the library index; true when the macro can be invoked afterwards.
+pub fn install_calc_driver(standard_dir: &Path) -> bool {
+    if std::fs::create_dir_all(standard_dir).is_err() {
+        return false;
+    }
+    let xba = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE script:module PUBLIC \"-//OpenOffice.org//DTD OfficeDocument 1.0//EN\" \"module.dtd\">\n\
+         <script:module xmlns:script=\"http://openoffice.org/2000/script\" \
+         script:name=\"GitcommitDiff\" script:language=\"StarBasic\">{}</script:module>",
+        xml_escape(CALC_DRIVER)
+    );
+    if std::fs::write(standard_dir.join("GitcommitDiff.xba"), xba).is_err() {
+        return false;
+    }
+    // register the module in the library index unless it is already listed
+    let index = standard_dir.join("script.xlb");
+    let current = std::fs::read_to_string(&index).unwrap_or_default();
+    let updated = if current.contains("library:name=\"GitcommitDiff\"") {
+        return true;
+    } else if let Some(pos) = current.rfind("</library:library>") {
+        format!(
+            "{} <library:element library:name=\"GitcommitDiff\"/>\n{}",
+            &current[..pos],
+            &current[pos..]
+        )
+    } else {
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE library:library PUBLIC \"-//OpenOffice.org//DTD OfficeDocument 1.0//EN\" \"library.dtd\">\n\
+         <library:library xmlns:library=\"http://openoffice.org/2000/library\" \
+         library:name=\"Standard\" library:readonly=\"false\" library:passwordprotected=\"false\">\n\
+         \x20<library:element library:name=\"GitcommitDiff\"/>\n\
+         </library:library>"
+            .to_string()
+    };
+    std::fs::write(&index, updated).is_ok()
+}
+
+/// Names under which the LibreOffice launcher is installed on typical distros.
+const LO_BINARIES: [&str; 3] = ["libreoffice", "soffice", "localc"];
+
+/// Runs one LibreOffice command line, trying each launcher name in turn.
+fn spawn_libreoffice(args: &[&std::path::Path]) -> Result<(), String> {
+    let mut last = None;
+    for exe in LO_BINARIES {
+        let mut cmd = Command::new(exe);
+        cmd.args(args);
+        match cmd.spawn() {
+            Ok(_) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(match last {
+        Some(e) => format!("cannot start LibreOffice: {e}"),
+        None => format!(
+            "no LibreOffice launcher found (tried {})",
+            LO_BINARIES.join(", ")
+        ),
+    })
+}
+
+/// Opens `file` in LibreOffice without running a compare.
+pub fn open_in_calc(file: &Path) -> Result<(), String> {
+    spawn_libreoffice(&[file])
+}
+
+/// Opens `work_file` in LibreOffice Calc and runs its built-in Compare Sheets
+/// against `other_file` (the HEAD copy). When the profile is not usable yet,
+/// only the file is opened so the user can start the compare manually.
+pub fn compare_with_calc(work_file: &Path, other_file: &Path) -> Result<(), String> {
+    let macro_url = match lo_standard_lib_dir() {
+        Some(dir) if install_calc_driver(&dir) => Some(format!(
+            "macro:///Standard.GitcommitDiff.CompareWith({})",
+            file_url(other_file)
+        )),
+        _ => {
+            eprintln!(
+                "gitcommit: LibreOffice profile not found, opening the file \
+                 without comparison (use Sheet > Compare Spreadsheet)"
+            );
+            None
+        }
+    };
+    match &macro_url {
+        Some(m) => spawn_libreoffice(&[work_file, std::path::Path::new(m)]),
+        None => open_in_calc(work_file),
+    }
+}

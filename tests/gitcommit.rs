@@ -81,3 +81,49 @@ fn amend_rename_commit_flow() {
     // parent the file is a plain add (no rename to show)
     assert_eq!(head[0].action, gl::Action::Added);
 }
+
+// ---- spreadsheet diffs via the LibreOffice Calc driver ----------------------
+
+#[test]
+fn is_spreadsheet_only_for_calc_formats() {
+    assert!(gl::is_spreadsheet("isa.ods"));
+    assert!(gl::is_spreadsheet("ISA.ODS"));
+    assert!(gl::is_spreadsheet("a/b/sheet.XLSX"));
+    assert!(gl::is_spreadsheet("legacy.xls"));
+    // templates are opened as new documents, so in-place compare would fail
+    assert!(!gl::is_spreadsheet("t.ots"));
+    assert!(!gl::is_spreadsheet("notes.txt"));
+    assert!(!gl::is_spreadsheet("noext"));
+}
+
+#[test]
+fn file_url_percent_encodes_path() {
+    // the URL is part of a command-line macro argument, so blanks, commas,
+    // parentheses, dots-for-safety and shell or macro syntax must not
+    // survive literally; ':' and '/' keep the scheme readable for LibreOffice
+    let u = gl::file_url(std::path::Path::new("/tmp/a b/c(head).ods"));
+    assert_eq!(u, "file:///tmp/a%20b/c%28head%29.ods");
+    assert!(gl::file_url(std::path::Path::new("/x,y")).contains("%2C"));
+}
+
+#[test]
+fn install_calc_driver_writes_module_and_registers_it() {
+    let dir = temp_dir("calc-driver");
+    std::fs::write(
+        dir.join("script.xlb"),
+        "<library:library>\n <library:element library:name=\"Module1\"/>\n</library:library>",
+    )
+    .unwrap();
+
+    assert!(gl::install_calc_driver(&dir));
+    let xba = std::fs::read_to_string(dir.join("GitcommitDiff.xba")).unwrap();
+    assert!(xba.contains("Sub CompareWith(sOtherUrl As String)"));
+    assert!(xba.contains(".uno:CompareDocuments"));
+    let xlb = std::fs::read_to_string(dir.join("script.xlb")).unwrap();
+    assert!(xlb.contains("library:name=\"Module1\""), "existing module kept");
+
+    // a second run refreshes the module but must not register it twice
+    assert!(gl::install_calc_driver(&dir));
+    let xlb = std::fs::read_to_string(dir.join("script.xlb")).unwrap();
+    assert_eq!(xlb.matches("GitcommitDiff").count(), 1);
+}

@@ -4,7 +4,9 @@
 //! "Amend last commit" checkbox on top, and a checkable file list (stage
 //! checkbox, name, status, +/- lines) below - plus Cancel/Commit buttons.
 //! Double-clicking a file opens its changes (HEAD vs. working tree) in meld,
-//! the same way gitlog's file list opens the changes of a commit.
+//! the same way gitlog's file list opens the changes of a commit. Spreadsheets
+//! (.ods, .xlsx, ...) use LibreOffice Calc's built-in Compare Sheets feature
+//! instead, because meld cannot diff their binary format.
 
 use std::collections::HashSet;
 use std::env;
@@ -51,16 +53,19 @@ fn num_str(n: Option<i64>) -> String {
     }
 }
 
-/// Writes the content of `path` at `rev` to `dest` (empty file if it does
-/// not exist there, i.e. the file was added or deleted on that side).
-fn write_blob(repo: &Path, rev: &str, path: &str, dest: &Path) {
+/// Writes the content of `path` at `rev` to `dest`; false when the file does
+/// not exist at that revision (i.e. it was added or deleted on that side).
+fn write_blob(repo: &Path, rev: &str, path: &str, dest: &Path) -> bool {
     let Ok(out) = std::process::Command::new("git")
         .args(["-C", &repo.to_string_lossy().into_owned(), "show", &format!("{rev}:{path}")])
         .output()
     else {
-        return;
+        return false;
     };
-    let _ = std::fs::write(dest, &out.stdout);
+    if !out.status.success() {
+        return false;
+    }
+    std::fs::write(dest, &out.stdout).is_ok()
 }
 
 /// Appends one row per file to the file list; `precheck` decides the initial
@@ -242,10 +247,11 @@ fn main() -> ExitCode {
         files_scroll.set_overlay_scrolling(false);
         files_scroll.set_child(Some(&files_tree));
 
-        // ---- double-click a file: open its changes in meld ----------------------
+        // ---- double-click a file: open its changes in meld (or Calc) ----------
         // The list shows the working tree against HEAD (that is also where
-        // the +/- counts come from), so meld compares the HEAD version with
-        // the current working-tree file (same pattern as gitlog's file list).
+        // the +/- counts come from), so the tools compare the HEAD version
+        // with the current working-tree file (same pattern as gitlog's
+        // file list). Spreadsheets go to LibreOffice Calc's Compare Sheets.
         {
             let store = files_store.clone();
             let repo = repo.clone();
@@ -276,11 +282,24 @@ fn main() -> ExitCode {
                     Some(ext) => dir.join(format!("{tag}.head.{ext}")),
                     None => dir.join(format!("{tag}.head")),
                 };
-                // HEAD version (empty for files not in HEAD, e.g. new files)
-                write_blob(&repo, "HEAD", old_path, &head_file);
+                // HEAD version (missing for files not in HEAD, e.g. new files)
+                let in_head = write_blob(&repo, "HEAD", old_path, &head_file);
                 // the real file; for deleted files meld creates it when the
                 // user saves, which restores it in the working tree
                 let work_file = repo.join(new_path);
+                if gl::is_spreadsheet(new_path) {
+                    // Calc's compare needs two real spreadsheets; added or
+                    // deleted rows only have one side, so just open that one
+                    let opened = match (in_head, work_file.exists()) {
+                        (true, true) => gl::compare_with_calc(&work_file, &head_file),
+                        (true, false) => gl::open_in_calc(&head_file),
+                        _ => gl::open_in_calc(&work_file),
+                    };
+                    if let Err(e) = opened {
+                        eprintln!("gitcommit: {e}");
+                    }
+                    return;
+                }
                 if let Err(e) = std::process::Command::new("meld")
                     .args([&head_file, &work_file])
                     .spawn()

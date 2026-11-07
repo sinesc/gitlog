@@ -57,16 +57,19 @@ fn lookup_old_path(display_name: &str) -> &str {
     display_name.split("=>").next().unwrap_or(display_name).trim()
 }
 
-/// Writes the blob of `path` at `rev` to `dest` (empty file if it does not
-/// exist there, i.e. the file was added or deleted at that side).
-fn write_blob(repo: &std::path::Path, rev: &str, path: &str, dest: &std::path::Path) {
+/// Writes the blob of `path` at `rev` to `dest`; false when the file does
+/// not exist at that revision (i.e. it was added or deleted at that side).
+fn write_blob(repo: &std::path::Path, rev: &str, path: &str, dest: &std::path::Path) -> bool {
     let Ok(out) = std::process::Command::new("git")
         .args(["-C", &repo.to_string_lossy().into_owned(), "show", &format!("{rev}:{path}")])
         .output()
     else {
-        return;
+        return false;
     };
-    let _ = std::fs::write(dest, &out.stdout);
+    if !out.status.success() {
+        return false;
+    }
+    std::fs::write(dest, &out.stdout).is_ok()
 }
 
 fn numstat(n: Option<i64>) -> String {
@@ -491,7 +494,8 @@ fn main() -> ExitCode {
         let files_scroll = gtk::ScrolledWindow::builder().build();
         files_scroll.set_child(Some(&ui.files_tree));
 
-        // double-click a file: open its changes at the selected commit in meld
+        // double-click a file: open its changes at the selected commit in
+        // meld (spreadsheets in LibreOffice Calc's Compare Sheets)
         {
             let files_store = ui.files_store.clone();
             let selected_hash = ui.selected_hash.clone();
@@ -511,15 +515,40 @@ fn main() -> ExitCode {
                 if std::fs::create_dir_all(&dir).is_err() {
                     return;
                 }
-                // flat names so subdirectory paths stay valid
-                let old_file = dir.join(format!(
-                    "{}.old",
-                    lookup_old_path(&name).rsplit('/').next().unwrap_or("file")
-                ));
-                let new_file = dir.join(lookup_path(&name).rsplit('/').next().unwrap_or("file"));
+                // flat names so subdirectory paths stay valid; LibreOffice
+                // picks the compare filter from the extension, so the parent
+                // copy of a spreadsheet keeps one as well
+                let base_new = lookup_path(&name).rsplit('/').next().unwrap_or("file");
+                let base_old = lookup_old_path(&name).rsplit('/').next().unwrap_or("file");
+                let new_file = dir.join(base_new);
+                let old_file = match std::path::Path::new(base_old)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                {
+                    Some(ext) if gl::is_spreadsheet(base_old) => {
+                        let stem = base_old.trim_end_matches(&format!(".{ext}"));
+                        dir.join(format!("{stem}.head.{ext}"))
+                    }
+                    _ => dir.join(format!("{base_old}.old")),
+                };
                 // added files have no parent version, deleted files none now
-                write_blob(&repo, &format!("{hash}^"), lookup_old_path(&name), &old_file);
-                write_blob(&repo, &hash, lookup_path(&name), &new_file);
+                let parent_ok =
+                    write_blob(&repo, &format!("{hash}^"), lookup_old_path(&name), &old_file);
+                let commit_ok = write_blob(&repo, &hash, lookup_path(&name), &new_file);
+                if gl::is_spreadsheet(base_new) {
+                    // Calc needs two real spreadsheets; added or deleted
+                    // files only have one side, so just open that one
+                    let opened = match (parent_ok, commit_ok) {
+                        (true, true) => gl::compare_with_calc(&new_file, &old_file),
+                        (true, false) => gl::open_in_calc(&old_file),
+                        (false, true) => gl::open_in_calc(&new_file),
+                        (false, false) => Ok(()),
+                    };
+                    if let Err(e) = opened {
+                        eprintln!("gitlog: {e}");
+                    }
+                    return;
+                }
                 if let Err(e) = std::process::Command::new("meld")
                     .args([&old_file, &new_file])
                     .spawn()
