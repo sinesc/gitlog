@@ -1094,6 +1094,10 @@ Sub CompareWith(sOtherUrl As String)
     Dim oHelper As Object
     oHelper = CreateUnoService(\"com.sun.star.frame.DispatchHelper\")
     oHelper.executeDispatch(oDoc.CurrentController.Frame, \".uno:CompareDocuments\", \"\", 0, a())
+    ' The compare marks themselves mark the document as modified although the
+    ' user changed nothing; clear that so closing does not ask to save. Real
+    ' edits or accepting changes set the flag again.
+    oDoc.setModified(False)
 End Sub
 ";
 
