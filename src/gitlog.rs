@@ -432,10 +432,25 @@ pub fn unstage_path(repo: &Path, path: &str) -> Result<(), String> {
     run_git(repo, &["restore", "--staged", "--", path])
 }
 
-/// Remove one path from the index only (the working-tree file stays) -
-/// used to drop a file from an amended commit.
+/// Remove one path from the index only (the working-tree file stays);
+/// a path that is not in the index is not an error.
 pub fn rm_cached_path(repo: &Path, path: &str) -> Result<(), String> {
-    run_git(repo, &["rm", "-q", "-r", "--cached", "--", path])
+    run_git(repo, &["rm", "-q", "-r", "--cached", "--ignore-unmatch", "--", path])
+}
+
+/// Drop one file's change from the commit that is about to be amended by
+/// resetting its index entry to the *parent* commit: a file the previous
+/// commit modified stays in the amended commit with its old content (the
+/// modification becomes an ordinary uncommitted work-tree change instead
+/// of being committed as a deletion), a file the previous commit deleted
+/// comes back, and a file it added is removed from the index (it does not
+/// exist at `HEAD^`, so the restore fails and `git rm --cached` applies).
+/// The working-tree file is never touched.
+pub fn uncommit_path(repo: &Path, path: &str) -> Result<(), String> {
+    if run_git(repo, &["restore", "--staged", "--source=HEAD^", "--", path]).is_ok() {
+        return Ok(());
+    }
+    rm_cached_path(repo, path)
 }
 
 /// True when the index matches `HEAD`, i.e. nothing is staged to commit.
@@ -505,6 +520,9 @@ pub fn amend_files(repo: &Path) -> Vec<WorkFile> {
 /// already staged.
 pub struct StageRow {
     pub path: String,
+    /// For rename rows the old path (needed to undo a rename from an
+    /// amended commit); `None` otherwise.
+    pub old_path: Option<String>,
     pub checked: bool,
     pub in_head: bool,
     pub staged: bool,
@@ -516,10 +534,21 @@ pub struct StageRow {
 pub fn commit_checked(repo: &Path, rows: &[StageRow], amend: bool, message: &str) -> Result<(), String> {
     for row in rows {
         if amend {
-            if row.in_head && !row.checked {
-                // remove from the amended commit, keep the work tree file
-                rm_cached_path(repo, &row.path)?;
-            } else if row.checked {
+            if !row.checked {
+                if row.in_head {
+                    // undo the previous commit's change for this file: the
+                    // amended commit gets the parent's version (or, for a
+                    // file the previous commit added, no version at all);
+                    // the work tree file stays as an uncommitted change
+                    uncommit_path(repo, &row.path)?;
+                    if let Some(old) = &row.old_path {
+                        uncommit_path(repo, old)?;
+                    }
+                } else if row.staged {
+                    // staged work tree file: just take it out of the index
+                    unstage_path(repo, &row.path)?;
+                }
+            } else {
                 stage_path(repo, &row.path)?;
             }
         } else if row.checked && !row.staged {

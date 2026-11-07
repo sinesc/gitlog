@@ -32,6 +32,7 @@ const W_DELETED: u32 = 4;
 const W_PATH: u32 = 5; // path for git operations (hidden)
 const W_IN_HEAD: u32 = 6; // file exists in the previous commit (hidden)
 const W_STAGED: u32 = 7; // file is already in the index (hidden)
+const W_OLD_PATH: u32 = 8; // old path of rename rows, "" otherwise (hidden)
 
 /// Localized label for a working-tree change; "new" instead of "added"
 /// because untracked files are meant to be added by this commit.
@@ -77,6 +78,13 @@ fn add_file_rows(
 ) {
     store.clear();
     for f in files {
+        // rename rows must know the old path to undo the rename when the
+        // user unchecks them while amending
+        let old_path = if f.action == gl::Action::Renamed {
+            f.display_name.split("=>").next().unwrap_or("").trim().to_string()
+        } else {
+            String::new()
+        };
         let iter = store.append();
         store.set(
             &iter,
@@ -89,6 +97,7 @@ fn add_file_rows(
                 (W_PATH, &f.path),
                 (W_IN_HEAD, &f.in_head),
                 (W_STAGED, &f.staged),
+                (W_OLD_PATH, &old_path),
             ],
         );
     }
@@ -119,7 +128,9 @@ fn read_rows(store: &gtk::ListStore) -> Vec<gl::StageRow> {
     let mut rows = Vec::new();
     let mut iter = store.iter_first();
     while let Some(mut i) = iter {
+        let old: String = store.get(&i, W_OLD_PATH as i32);
         rows.push(gl::StageRow {
+            old_path: (!old.is_empty()).then_some(old),
             path: store.get(&i, W_PATH as i32),
             checked: store.get(&i, W_STAGE as i32),
             in_head: store.get(&i, W_IN_HEAD as i32),
@@ -202,6 +213,7 @@ fn main() -> ExitCode {
             glib::Type::STRING,
             glib::Type::BOOL,
             glib::Type::BOOL,
+            glib::Type::STRING,
         ]);
         let files_tree = gtk::TreeView::builder().model(&files_store).build();
 

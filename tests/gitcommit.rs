@@ -71,7 +71,7 @@ fn amend_rename_commit_flow() {
     assert_eq!(files.len(), 1);
     let rows = files
         .iter()
-        .map(|f| StageRow { path: f.path.clone(), checked: true, in_head: f.in_head, staged: f.staged })
+        .map(|f| StageRow { old_path: None, path: f.path.clone(), checked: true, in_head: f.in_head, staged: f.staged })
         .collect::<Vec<_>>();
     gl::commit_checked(&dir, &rows, true, "amended with rename").unwrap();
     let head = gl::head_files(&dir).expect("head_files after amend");
@@ -80,6 +80,121 @@ fn amend_rename_commit_flow() {
     // x.txt only existed in the amended-away commit, so relative to the
     // parent the file is a plain add (no rename to show)
     assert_eq!(head[0].action, gl::Action::Added);
+}
+
+#[test]
+fn amend_uncheck_modified_file_leaves_it_uncommitted() {
+    let dir = init_repo("amend-uncheck-mod");
+    write(&dir, "keep.txt", "k\n");
+    write(&dir, "mod.txt", "original\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "first"]);
+    // second commit modifies mod.txt *and* keep.txt; unchecking mod.txt
+    // must not record a deletion in the amended commit
+    write(&dir, "mod.txt", "changed in commit\n");
+    write(&dir, "keep.txt", "k2\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "second"]);
+
+    let rows: Vec<StageRow> = gl::amend_files(&dir)
+        .iter()
+        .map(|f| StageRow {
+            old_path: None,
+            path: f.path.clone(),
+            checked: f.path != "mod.txt",
+            in_head: f.in_head,
+            staged: f.staged,
+        })
+        .collect();
+    gl::commit_checked(&dir, &rows, true, "amended").unwrap();
+
+    // the amended commit only touches keep.txt...
+    let head = gl::head_files(&dir).expect("head_files after amend");
+    assert!(head.iter().all(|f| f.path != "mod.txt"), "mod.txt left the commit");
+    // ...and still carries mod.txt with its parent content (not deleted)
+    assert_eq!(git_out(&dir, &["show", "HEAD:mod.txt"]), "original\n");
+    // the modification is now an ordinary uncommitted work-tree change
+    let wt = gl::worktree_changes(&dir);
+    let m = wt.iter().find(|f| f.path == "mod.txt").expect("mod.txt uncommitted");
+    assert_eq!(m.action, gl::Action::Modified);
+    assert_eq!(m.added, Some(1));
+}
+
+#[test]
+fn amend_uncheck_added_and_deleted_files() {
+    let dir = init_repo("amend-uncheck-add-del");
+    write(&dir, "keep.txt", "k\n");
+    write(&dir, "gone.txt", "g\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "first"]);
+    // second commit adds new.txt and deletes gone.txt
+    write(&dir, "gone.txt", "");
+    std::fs::remove_file(dir.join("gone.txt")).unwrap();
+    write(&dir, "new.txt", "fresh\n");
+    write(&dir, "keep.txt", "k2\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "second"]);
+
+    let rows: Vec<StageRow> = gl::amend_files(&dir)
+        .iter()
+        .map(|f| StageRow {
+            old_path: None,
+            path: f.path.clone(),
+            checked: f.path == "keep.txt",
+            in_head: f.in_head,
+            staged: f.staged,
+        })
+        .collect();
+    gl::commit_checked(&dir, &rows, true, "amended").unwrap();
+
+    // amended commit only changes keep.txt: new.txt is not in it...
+    assert!(git_out(&dir, &["show", "--name-only", "--format=", "HEAD"]).trim() == "keep.txt");
+    // ...gone.txt is back from the parent (not deleted)...
+    assert_eq!(git_out(&dir, &["show", "HEAD:gone.txt"]), "g\n");
+    // ...new.txt stays untracked and gone.txt stays locally deleted
+    let wt = gl::worktree_changes(&dir);
+    assert!(wt.iter().any(|f| f.path == "gone.txt" && f.action == gl::Action::Deleted));
+    let untracked = gl::untracked_files(&dir);
+    assert!(untracked.iter().any(|p| p == "new.txt"), "new.txt untracked");
+}
+
+#[test]
+fn amend_uncheck_committed_rename_restores_old_path() {
+    let dir = init_repo("amend-uncheck-rename");
+    write(&dir, "x.txt", "line1\n");
+    write(&dir, "z.txt", "z\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "first"]);
+    // the rename is part of the commit being amended (z.txt changes too,
+    // so unchecking the rename does not empty the commit)
+    git(&dir, &["mv", "x.txt", "y.txt"]);
+    write(&dir, "z.txt", "z2\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "renamed"]);
+
+    let rows: Vec<StageRow> = gl::amend_files(&dir)
+        .iter()
+        .map(|f| StageRow {
+            old_path: (f.action == gl::Action::Renamed)
+                .then(|| f.display_name.split("=>").next().unwrap_or("").trim().to_string()),
+            path: f.path.clone(),
+            checked: f.path != "y.txt",
+            in_head: f.in_head,
+            staged: f.staged,
+        })
+        .collect();
+    gl::commit_checked(&dir, &rows, true, "amended").unwrap();
+
+    // the amended commit contains neither side of the rename (it is empty),
+    // i.e. x.txt simply comes back from the parent instead of y.txt showing
+    // up as added + x.txt as deleted
+    assert_eq!(git_out(&dir, &["show", "HEAD:x.txt"]), "line1\n");
+    assert!(!git_out(&dir, &["ls-tree", "-r", "--name-only", "HEAD"]).lines().any(|p| p == "y.txt"));
+    // the rename stays uncommitted in the work tree (x.txt locally deleted,
+    // y.txt untracked - unstaged renames always show as two entries)
+    let wt = gl::worktree_changes(&dir);
+    assert!(wt.iter().any(|f| f.path == "x.txt" && f.action == gl::Action::Deleted));
+    assert!(gl::untracked_files(&dir).iter().any(|p| p == "y.txt"));
 }
 
 // ---- spreadsheet diffs via the LibreOffice Calc driver ----------------------
