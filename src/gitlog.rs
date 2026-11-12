@@ -432,6 +432,33 @@ pub fn unstage_path(repo: &Path, path: &str) -> Result<(), String> {
     run_git(repo, &["restore", "--staged", "--", path])
 }
 
+/// Reset index and working tree of one path back to HEAD (discards the
+/// uncommitted changes of that file; recreates it when it was deleted).
+pub fn restore_path(repo: &Path, path: &str) -> Result<(), String> {
+    run_git(repo, &["restore", "--source=HEAD", "--staged", "--worktree", "--", path])
+}
+
+/// Append one pattern line to `<repo>/.gitignore` (the file is created when
+/// missing); a pattern that is already present verbatim is not added again.
+pub fn append_gitignore(repo: &Path, pattern: &str) -> Result<(), String> {
+    let file = repo.join(".gitignore");
+    let existing = match std::fs::read_to_string(&file) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    if existing.lines().any(|l| l.trim() == pattern) {
+        return Ok(());
+    }
+    let mut out = existing;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(pattern);
+    out.push('\n');
+    std::fs::write(&file, out).map_err(|e| e.to_string())
+}
+
 /// Remove one path from the index only (the working-tree file stays);
 /// a path that is not in the index is not an error.
 pub fn rm_cached_path(repo: &Path, path: &str) -> Result<(), String> {

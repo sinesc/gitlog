@@ -58,5 +58,11 @@
   "rebase.pushed": "Warning: this commit may have been pushed. Rewriting pushed commits can cause problems for other contributors.",
   "rebase.edit": "Edit commit details",
   "error.rebase_failed": "Rewriting the commit failed: %{error}",
-  "error.invalid_date": "Invalid date: expected format YYYY-MM-DD HH:MM:SS."
+  "error.invalid_date": "Invalid date: expected format YYYY-MM-DD HH:MM:SS.",
+  "ctx.open_diff": "Open diff",
+  "ctx.revert": "Revert changes",
+  "ctx.ignore_file": "Add file to .gitignore",
+  "ctx.ignore_dir": "Add directory to .gitignore",
+  "error.restore_failed": "Revert failed: %{error}",
+  "error.gitignore_failed": "Adding to .gitignore failed: %{error}"
 }

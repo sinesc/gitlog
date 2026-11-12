@@ -58,5 +58,11 @@
   "rebase.pushed": "Attention : cet commit a peut-être déjà été poussé (push). Réécrire des commits déjà poussés peut causer des problèmes aux autres contributeurs.",
   "rebase.edit": "Modifier les détails du commit",
   "error.rebase_failed": "L'écriture du commit a échoué : %{error}",
-  "error.invalid_date": "Date invalide : format attendu YYYY-MM-DD HH:MM:SS."
+  "error.invalid_date": "Date invalide : format attendu YYYY-MM-DD HH:MM:SS.",
+  "ctx.open_diff": "Ouvrir le diff",
+  "ctx.revert": "Annuler les modifications",
+  "ctx.ignore_file": "Ajouter le fichier au .gitignore",
+  "ctx.ignore_dir": "Ajouter le dossier au .gitignore",
+  "error.restore_failed": "Échec de l'annulation : %{error}",
+  "error.gitignore_failed": "Échec de l'ajout au .gitignore : %{error}"
 }

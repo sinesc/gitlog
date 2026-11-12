@@ -242,3 +242,85 @@ fn install_calc_driver_writes_module_and_registers_it() {
     let xlb = std::fs::read_to_string(dir.join("script.xlb")).unwrap();
     assert_eq!(xlb.matches("GitcommitDiff").count(), 1);
 }
+
+// ---- context menu actions: git restore / .gitignore -------------------------
+
+#[test]
+fn restore_path_discards_worktree_and_index_changes() {
+    let dir = fixture_repo("ctx-restore");
+    // modify and stage a.txt, so index AND worktree differ from HEAD
+    write(&dir, "a.txt", "line1\nline2\nline3\nextra\n");
+    git(&dir, &["add", "a.txt"]);
+    gl::restore_path(&dir, "a.txt").unwrap();
+    // index and working tree must match HEAD again
+    assert!(gl::worktree_changes(&dir)
+        .iter()
+        .all(|f| f.path != "a.txt"));
+    assert!(gl::index_matches_head(&dir));
+    let content = std::fs::read_to_string(dir.join("a.txt")).unwrap();
+    // HEAD's a.txt (fixture: "second commit" added line3)
+    assert_eq!(content, "line1\nline2\nline3\n");
+}
+
+#[test]
+fn restore_path_recreates_deleted_file() {
+    let dir = fixture_repo("ctx-restore-del");
+    std::fs::remove_dir_all(dir.join("x")).ok();
+    std::fs::remove_file(dir.join("b2.txt")).unwrap();
+    git(&dir, &["rm", "-q", "b2.txt"]);
+    gl::restore_path(&dir, "b2.txt").unwrap();
+    assert!(dir.join("b2.txt").exists());
+    assert!(gl::index_matches_head(&dir));
+}
+
+#[test]
+fn append_gitignore_creates_appends_and_dedups() {
+    let dir = init_repo("ctx-ignore");
+    // creates the file when missing
+    gl::append_gitignore(&dir, "/a.txt").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+        "/a.txt\n"
+    );
+    // appends after content without a trailing newline cleanly
+    std::fs::write(dir.join(".gitignore"), "*.tmp").unwrap();
+    gl::append_gitignore(&dir, "/b.txt").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+        "*.tmp\n/b.txt\n"
+    );
+    // a pattern that is already present is not added again
+    gl::append_gitignore(&dir, "/b.txt").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+        "*.tmp\n/b.txt\n"
+    );
+}
+
+#[test]
+fn gitignored_untracked_file_leaves_worktree_changes() {
+    let dir = fixture_repo("ctx-ignore-file");
+    write(&dir, "p/secret.txt", "top secret\n");
+    assert!(gl::worktree_changes(&dir)
+        .iter()
+        .any(|f| f.path == "p/secret.txt"));
+    gl::append_gitignore(&dir, "/p/secret.txt").unwrap();
+    assert!(gl::worktree_changes(&dir)
+        .iter()
+        .all(|f| f.path != "p/secret.txt"));
+}
+
+#[test]
+fn gitignored_directory_covers_whole_tree() {
+    let dir = fixture_repo("ctx-ignore-dir");
+    write(&dir, "p/a.txt", "a\n");
+    write(&dir, "p/sub/b.txt", "b\n");
+    write(&dir, "q/c.txt", "c\n");
+    gl::append_gitignore(&dir, "/p/").unwrap();
+    let paths: Vec<String> = gl::worktree_changes(&dir)
+        .into_iter()
+        .map(|f| f.path)
+        .collect();
+    assert!(!paths.iter().any(|p| p.starts_with("p/")));
+    assert!(paths.iter().any(|p| p == "q/c.txt"));
+}

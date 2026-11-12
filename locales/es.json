@@ -58,5 +58,11 @@
   "rebase.pushed": "Advertencia: este commit puede haberse enviado (push). Reescribir commits ya enviados puede causar problemas a otros colaboradores.",
   "rebase.edit": "Editar detalles del commit",
   "error.rebase_failed": "Falló la reescritura del commit: %{error}",
-  "error.invalid_date": "Fecha no válida: formato esperado YYYY-MM-DD HH:MM:SS."
+  "error.invalid_date": "Fecha no válida: formato esperado YYYY-MM-DD HH:MM:SS.",
+  "ctx.open_diff": "Abrir diff",
+  "ctx.revert": "Revertir los cambios",
+  "ctx.ignore_file": "Añadir archivo a .gitignore",
+  "ctx.ignore_dir": "Añadir carpeta a .gitignore",
+  "error.restore_failed": "Error al revertir los cambios: %{error}",
+  "error.gitignore_failed": "Error al añadir a .gitignore: %{error}"
 }

@@ -67,3 +67,30 @@ fn rebase_title_resolves_in_every_locale() {
         assert_eq!(rust_i18n::t!("rebase.title", locale = locale, hash = &hash), expected);
     }
 }
+
+#[test]
+fn context_menu_keys_resolve_in_every_locale() {
+    for key in ["ctx.open_diff", "ctx.revert", "ctx.ignore_file", "ctx.ignore_dir"] {
+        for locale in LOCALES {
+            let s = rust_i18n::t!(key, locale = locale);
+            assert!(!s.is_empty(), "{key} missing in {locale}");
+            assert_ne!(s, key, "{key} missing in {locale}");
+        }
+    }
+    assert_eq!(rust_i18n::t!("ctx.ignore_dir", locale = "en"), "Add directory to .gitignore");
+    assert_eq!(rust_i18n::t!("ctx.ignore_dir", locale = "de"), "Ordner zu .gitignore hinzufügen");
+}
+
+#[test]
+fn restore_error_resolves_and_interpolates_in_every_locale() {
+    let e = "boom";
+    assert_eq!(rust_i18n::t!("error.restore_failed", locale = "en", error = &e), "Revert failed: boom");
+    assert_eq!(rust_i18n::t!("error.restore_failed", locale = "de", error = &e), "Verwerfen fehlgeschlagen: boom");
+    assert_eq!(rust_i18n::t!("error.restore_failed", locale = "fr", error = &e), "Échec de l'annulation : boom");
+    assert_eq!(rust_i18n::t!("error.restore_failed", locale = "nl", error = &e), "Verwerpen mislukt: boom");
+    // the gitignore failure message exists in every locale too
+    for locale in LOCALES {
+        let s = rust_i18n::t!("error.gitignore_failed", locale = locale, error = &e);
+        assert!(s.contains("boom"), "error.gitignore_failed missing in {locale}");
+    }
+}

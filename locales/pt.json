@@ -58,5 +58,11 @@
   "rebase.pushed": "Aviso: este commit pode já ter sido enviado (push). Reescrever commits já enviados pode causar problemas para outros colaboradores.",
   "rebase.edit": "Editar detalhes do commit",
   "error.rebase_failed": "Falha ao reescrever o commit: %{error}",
-  "error.invalid_date": "Data inválida: formato esperado YYYY-MM-DD HH:MM:SS."
+  "error.invalid_date": "Data inválida: formato esperado YYYY-MM-DD HH:MM:SS.",
+  "ctx.open_diff": "Abrir diff",
+  "ctx.revert": "Reverter alterações",
+  "ctx.ignore_file": "Adicionar ficheiro ao .gitignore",
+  "ctx.ignore_dir": "Adicionar pasta ao .gitignore",
+  "error.restore_failed": "Falha ao reverter: %{error}",
+  "error.gitignore_failed": "Falha ao adicionar ao .gitignore: %{error}"
 }

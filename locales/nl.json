@@ -58,5 +58,11 @@
   "rebase.pushed": "Waarschuwing: deze commit is mogelijk al gepusht. Het aanpassen van commits die al gepusht zijn, kan problemen veroorzaken voor andere bijdragers.",
   "rebase.edit": "Commitdetails bewerken",
   "error.rebase_failed": "Het herschrijven van de commit is mislukt: %{error}",
-  "error.invalid_date": "Ongeldige datum: verwacht formaat YYYY-MM-DD HH:MM:SS."
+  "error.invalid_date": "Ongeldige datum: verwacht formaat YYYY-MM-DD HH:MM:SS.",
+  "ctx.open_diff": "Diff openen",
+  "ctx.revert": "Wijzigingen verwerpen",
+  "ctx.ignore_file": "Bestand toevoegen aan .gitignore",
+  "ctx.ignore_dir": "Map toevoegen aan .gitignore",
+  "error.restore_failed": "Verwerpen mislukt: %{error}",
+  "error.gitignore_failed": "Toevoegen aan .gitignore mislukt: %{error}"
 }

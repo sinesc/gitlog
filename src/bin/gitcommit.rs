@@ -4,7 +4,9 @@
 //! "Amend last commit" checkbox on top, and a checkable file list (stage
 //! checkbox, name, status, +/- lines) below - plus Cancel/Commit buttons.
 //! Double-clicking a file opens its changes (HEAD vs. working tree) in meld,
-//! the same way gitlog's file list opens the changes of a commit. Spreadsheets
+//! the same way gitlog's file list opens the changes of a commit; right-clicking
+//! a file opens a context menu (open diff, revert changes, add file/directory
+//! to .gitignore). Spreadsheets
 //! (.ods, .xlsx, ...) use LibreOffice Calc's built-in Compare Sheets feature
 //! instead, because meld cannot diff their binary format.
 
@@ -157,21 +159,79 @@ struct RowData {
     old_path: String,
 }
 
+/// Open one file list row's changes (HEAD version vs. working tree) in meld,
+/// or in LibreOffice Calc for spreadsheet rows. `name` is the display name
+/// (rename rows are shown as "old => new"). Shared by the double-click
+/// handler and the context menu's "Open diff" entry.
+fn open_diff(repo: &Path, name: &str) {
+    // rename rows are displayed as "old => new"
+    let new_path = name.rsplit("=>").next().unwrap_or(name).trim();
+    let old_path = name.split("=>").next().unwrap_or(name).trim();
+    // Only the HEAD side needs a temporary copy; the right side
+    // of the comparison is the real working-tree file, so edits
+    // made (and saved) in meld land in the repository.
+    let dir = std::env::temp_dir().join(format!("gitcommit-{}", std::process::id()));
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    // flatten the full path so different files with the same
+    // base name do not overwrite each other's temp copies; keep
+    // the extension so meld picks the right highlighting
+    let tag: String = new_path
+        .chars()
+        .map(|c| if c == '/' { '-' } else { c })
+        .collect();
+    let head_file = match Path::new(new_path).extension().and_then(|e| e.to_str()) {
+        Some(ext) => dir.join(format!("{tag}.head.{ext}")),
+        None => dir.join(format!("{tag}.head")),
+    };
+    // HEAD version (missing for files not in HEAD, e.g. new files)
+    let in_head = write_blob(repo, "HEAD", old_path, &head_file);
+    // the real file; for deleted files meld creates it when the
+    // user saves, which restores it in the working tree
+    let work_file = repo.join(new_path);
+    if gl::is_spreadsheet(new_path) {
+        // Calc's compare needs two real spreadsheets; added or
+        // deleted rows only have one side, so just open that one
+        let opened = match (in_head, work_file.exists()) {
+            (true, true) => gl::compare_with_calc(&work_file, &head_file),
+            (true, false) => gl::open_in_calc(&head_file),
+            _ => gl::open_in_calc(&work_file),
+        };
+        if let Err(e) = opened {
+            eprintln!("gitcommit: {e}");
+        }
+        return;
+    }
+    if let Err(e) = std::process::Command::new("meld")
+        .args([&head_file, &work_file])
+        .spawn()
+    {
+        eprintln!("gitcommit: cannot open meld: {e}");
+    }
+}
+
+/// Visible + hidden data of one file-list row (used by the re-sort helpers
+/// and by the right-click context menu).
+fn row_data(store: &gtk::ListStore, iter: &gtk::TreeIter) -> RowData {
+    RowData {
+        stage: store.get(iter, W_STAGE as i32),
+        name: store.get(iter, W_NAME as i32),
+        status: store.get(iter, W_STATUS as i32),
+        added: store.get(iter, W_ADDED as i32),
+        deleted: store.get(iter, W_DELETED as i32),
+        path: store.get(iter, W_PATH as i32),
+        in_head: store.get(iter, W_IN_HEAD as i32),
+        staged: store.get(iter, W_STAGED as i32),
+        old_path: store.get(iter, W_OLD_PATH as i32),
+    }
+}
+
 fn read_row_data(store: &gtk::ListStore) -> Vec<RowData> {
     let mut rows = Vec::new();
     let mut iter = store.iter_first();
     while let Some(mut i) = iter {
-        rows.push(RowData {
-            stage: store.get(&i, W_STAGE as i32),
-            name: store.get(&i, W_NAME as i32),
-            status: store.get(&i, W_STATUS as i32),
-            added: store.get(&i, W_ADDED as i32),
-            deleted: store.get(&i, W_DELETED as i32),
-            path: store.get(&i, W_PATH as i32),
-            in_head: store.get(&i, W_IN_HEAD as i32),
-            staged: store.get(&i, W_STAGED as i32),
-            old_path: store.get(&i, W_OLD_PATH as i32),
-        });
+        rows.push(row_data(store, &i));
         iter = store.iter_next(&mut i).then_some(i);
     }
     rows
@@ -303,7 +363,15 @@ fn main() -> ExitCode {
             provider.load_from_data(
                 "scrollbar.horizontal slider { min-height: 12px; margin: 2px; }
                  scrollbar.vertical slider { min-width: 12px; margin: 2px; }
-                 .commit-buttons { margin: 6px; }",
+                 .commit-buttons { margin: 6px; }
+                 /* the file-list context menu: theme styling targets
+                    modelbutton rows (not exported in GTK 4), so the flat
+                    buttons in our plain popover need menu-like padding and
+                    an explicit pressed highlight (GTK 4.18 sets no :hover
+                    on these rows) */
+                 .ctx-menu > button.flat { padding: 6px 10px; min-height: 0; }
+                 .ctx-menu > button.flat:active:not(:disabled) { background-color: alpha(currentColor, 0.18); }
+                 .ctx-menu > button.flat:focus-visible { outline: 2px solid accent-color; outline-offset: -2px; }",
             );
             gtk::style_context_add_provider_for_display(
                 &display,
@@ -409,52 +477,7 @@ fn main() -> ExitCode {
                     return;
                 };
                 let name: String = store.get(&iter, W_NAME as i32);
-                // rename rows are displayed as "old => new"
-                let new_path = name.rsplit("=>").next().unwrap_or(&name).trim();
-                let old_path = name.split("=>").next().unwrap_or(&name).trim();
-                // Only the HEAD side needs a temporary copy; the right side
-                // of the comparison is the real working-tree file, so edits
-                // made (and saved) in meld land in the repository.
-                let dir = std::env::temp_dir()
-                    .join(format!("gitcommit-{}", std::process::id()));
-                if std::fs::create_dir_all(&dir).is_err() {
-                    return;
-                }
-                // flatten the full path so different files with the same
-                // base name do not overwrite each other's temp copies; keep
-                // the extension so meld picks the right highlighting
-                let tag: String = new_path
-                    .chars()
-                    .map(|c| if c == '/' { '-' } else { c })
-                    .collect();
-                let head_file = match Path::new(new_path).extension().and_then(|e| e.to_str()) {
-                    Some(ext) => dir.join(format!("{tag}.head.{ext}")),
-                    None => dir.join(format!("{tag}.head")),
-                };
-                // HEAD version (missing for files not in HEAD, e.g. new files)
-                let in_head = write_blob(&repo, "HEAD", old_path, &head_file);
-                // the real file; for deleted files meld creates it when the
-                // user saves, which restores it in the working tree
-                let work_file = repo.join(new_path);
-                if gl::is_spreadsheet(new_path) {
-                    // Calc's compare needs two real spreadsheets; added or
-                    // deleted rows only have one side, so just open that one
-                    let opened = match (in_head, work_file.exists()) {
-                        (true, true) => gl::compare_with_calc(&work_file, &head_file),
-                        (true, false) => gl::open_in_calc(&head_file),
-                        _ => gl::open_in_calc(&work_file),
-                    };
-                    if let Err(e) = opened {
-                        eprintln!("gitcommit: {e}");
-                    }
-                    return;
-                }
-                if let Err(e) = std::process::Command::new("meld")
-                    .args([&head_file, &work_file])
-                    .spawn()
-                {
-                    eprintln!("gitcommit: cannot open meld: {e}");
-                }
+                open_diff(&repo, &name);
             });
         }
 
@@ -653,6 +676,185 @@ fn main() -> ExitCode {
 
         // header checkbox reflects the initial row states
         sync_head_checkbox(&files_store, &head_toggle);
+
+        // ---- context menu (right click on a file row) -------------------------
+        // Open diff (the double-click action), Revert changes (git restore to
+        // HEAD), and the two .gitignore entries, in a plain Popover driven by
+        // a SimpleActionGroup, opened with its top-left corner at the mouse
+        // (GTK still keeps it on screen near the window edges). Revert is
+        // insensitive for untracked files (nothing to restore) and rename
+        // rows (two-sided operation); the gitignore entries are insensitive
+        // while amending (that list shows HEAD's files, not working changes);
+        // "Add directory" needs a parent directory, i.e. a path with a '/'.
+        {
+            let store = files_store.clone();
+            let tree = files_tree.clone();
+            let repo = repo.clone();
+            let win = window.clone();
+            let head = head_toggle.clone();
+            let sort = sort_state.clone();
+            let amend = amend_check.clone();
+            // row the menu was opened for; the action handlers read it
+            let ctx_row: Rc<std::cell::RefCell<Option<RowData>>> = Rc::default();
+
+            let actions = gtk::gio::SimpleActionGroup::new();
+            let act_diff = gtk::gio::SimpleAction::new("diff", None);
+            let act_revert = gtk::gio::SimpleAction::new("revert", None);
+            let act_ignore_file = gtk::gio::SimpleAction::new("ignore-file", None);
+            let act_ignore_dir = gtk::gio::SimpleAction::new("ignore-dir", None);
+
+            {
+                let ctx = ctx_row.clone();
+                let repo = repo.clone();
+                act_diff.connect_activate(move |_a, _p| {
+                    let Some(row) = ctx.borrow().clone() else { return };
+                    open_diff(&repo, &row.name);
+                });
+            }
+            {
+                let ctx = ctx_row.clone();
+                let repo = repo.clone();
+                let store = store.clone();
+                let win = win.clone();
+                let head = head.clone();
+                let sort = sort.clone();
+                act_revert.connect_activate(move |_a, _p| {
+                    let Some(row) = ctx.borrow().clone() else { return };
+                    match gl::restore_path(&repo, &row.path) {
+                        // reverted files disappear from the list; the
+                        // refresh keeps the checkbox states of the rest
+                        Ok(()) => {
+                            refresh_file_rows(&store, &repo);
+                            apply_sort(&store, &sort);
+                            sync_head_checkbox(&store, &head);
+                        }
+                        Err(e) => {
+                            error_dialog(&win, &t!("error.restore_failed", error = &e));
+                        }
+                    }
+                });
+            }
+            {
+                let ctx = ctx_row.clone();
+                let repo = repo.clone();
+                let store = store.clone();
+                let win = win.clone();
+                let head = head.clone();
+                let sort = sort.clone();
+                act_ignore_file.connect_activate(move |_a, _p| {
+                    let Some(row) = ctx.borrow().clone() else { return };
+                    // leading '/' anchors the pattern to the repo root
+                    let pattern = format!("/{}", row.path);
+                    match gl::append_gitignore(&repo, &pattern) {
+                        Ok(()) => {
+                            refresh_file_rows(&store, &repo);
+                            apply_sort(&store, &sort);
+                            sync_head_checkbox(&store, &head);
+                        }
+                        Err(e) => {
+                            error_dialog(
+                                &win,
+                                &t!("error.gitignore_failed", error = &e),
+                            );
+                        }
+                    }
+                });
+            }
+            {
+                let ctx = ctx_row.clone();
+                let repo = repo.clone();
+                let store = store.clone();
+                let win = win.clone();
+                let head = head.clone();
+                let sort = sort.clone();
+                act_ignore_dir.connect_activate(move |_a, _p| {
+                    let Some(row) = ctx.borrow().clone() else { return };
+                    // the action is only sensitive for paths containing a
+                    // '/', so the parent directory always exists
+                    let dir = Path::new(&row.path).parent().unwrap_or(Path::new(""));
+                    let pattern = format!("/{}/", dir.to_string_lossy());
+                    match gl::append_gitignore(&repo, &pattern) {
+                        Ok(()) => {
+                            refresh_file_rows(&store, &repo);
+                            apply_sort(&store, &sort);
+                            sync_head_checkbox(&store, &head);
+                        }
+                        Err(e) => {
+                            error_dialog(
+                                &win,
+                                &t!("error.gitignore_failed", error = &e),
+                            );
+                        }
+                    }
+                });
+            }
+            actions.add_action(&act_diff);
+            actions.add_action(&act_revert);
+            actions.add_action(&act_ignore_file);
+            actions.add_action(&act_ignore_dir);
+
+            // Plain Popover + buttons instead of PopoverMenu: the menu-model
+            // keyboard navigation would pre-select the first row on open and
+            // make the arrow keys fight the tree list; these buttons follow
+            // the actions' enabled state automatically, highlight on hover
+            // only, and close the popover when clicked. (GtkModelButton
+            // would be the menu look, but GTK 4 does not export it as
+            // public API, so gtk4-rs has no binding for it.)
+            let popover = gtk::Popover::builder().has_arrow(false).build();
+            popover.set_parent(&files_tree);
+            popover.insert_action_group("ctx", Some(&actions));
+            let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            menu_box.add_css_class("menu");
+            menu_box.add_css_class("ctx-menu");
+            popover.set_child(Some(&menu_box));
+            for (label, action) in [
+                (t!("ctx.open_diff"), "ctx.diff"),
+                (t!("ctx.revert"), "ctx.revert"),
+                (t!("ctx.ignore_file"), "ctx.ignore-file"),
+                (t!("ctx.ignore_dir"), "ctx.ignore-dir"),
+            ] {
+                let item = gtk::Button::builder().label(&*label).build();
+                item.add_css_class("flat");
+                // left-align the label like a menu row (the label is the
+                // button's child widget)
+                if let Some(child) = item.child().and_then(|w| w.downcast::<gtk::Label>().ok()) {
+                    child.set_xalign(0.0);
+                }
+                item.set_action_name(Some(action));
+                let pop = popover.clone();
+                item.connect_clicked(move |_b| pop.popdown());
+                menu_box.append(&item);
+            }
+
+            let gesture = gtk::GestureClick::new();
+            gesture.set_button(gtk::gdk::BUTTON_SECONDARY);
+            // dest_row_at_pos is deprecated in GTK 4 (TreeView itself is);
+            // it is still the way to find the row under a click position
+            #[allow(deprecated)]
+            gesture.connect_released(move |_g, _seq, x, y| {
+                // widget-relative coordinates of the click
+                let Some((Some(path), _pos)) = tree.dest_row_at_pos(x as i32, y as i32) else {
+                    return;
+                };
+                let Some(iter) = store.iter(&path) else { return };
+                let row = row_data(&store, &iter);
+                let amend_on = amend.is_active();
+                *ctx_row.borrow_mut() = Some(row.clone());
+                act_diff.set_enabled(true);
+                act_revert.set_enabled(!amend_on && row.in_head && row.old_path.is_empty());
+                act_ignore_file.set_enabled(!amend_on);
+                act_ignore_dir.set_enabled(!amend_on && row.path.contains('/'));
+                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                // the popover is centered on the pointing rectangle by
+                // default; shifting it right by half its width and up by
+                // the 1px rect height puts its top-left corner at the
+                // cursor (GTK still keeps the final position on screen)
+                let w = popover.measure(gtk::Orientation::Horizontal, -1).1;
+                popover.set_offset(w / 2, -1);
+                popover.popup();
+            });
+            files_tree.add_controller(gesture);
+        }
         // ---- cancel / commit ------------------------------------------------------
         {
             let store = files_store.clone();

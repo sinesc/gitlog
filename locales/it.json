@@ -58,5 +58,11 @@
   "rebase.pushed": "Avviso: questo commit potrebbe essere già stato pushato. Riscrivere commit già pushati può causare problemi agli altri collaboratori.",
   "rebase.edit": "Modifica dettagli del commit",
   "error.rebase_failed": "La riscrittura del commit non è riuscita: %{error}",
-  "error.invalid_date": "Data non valida: formato atteso YYYY-MM-DD HH:MM:SS."
+  "error.invalid_date": "Data non valida: formato atteso YYYY-MM-DD HH:MM:SS.",
+  "ctx.open_diff": "Apri diff",
+  "ctx.revert": "Ripristina le modifiche",
+  "ctx.ignore_file": "Aggiungi file a .gitignore",
+  "ctx.ignore_dir": "Aggiungi cartella a .gitignore",
+  "error.restore_failed": "Ripristino non riuscito: %{error}",
+  "error.gitignore_failed": "Aggiunta a .gitignore non riuscita: %{error}"
 }
