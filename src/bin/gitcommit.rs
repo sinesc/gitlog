@@ -8,10 +8,12 @@
 //! (.ods, .xlsx, ...) use LibreOffice Calc's built-in Compare Sheets feature
 //! instead, because meld cannot diff their binary format.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 
 extern crate gtk4 as gtk;
 
@@ -141,6 +143,98 @@ fn read_rows(store: &gtk::ListStore) -> Vec<gl::StageRow> {
     rows
 }
 
+/// Visible + hidden data of one file-list row; used to re-sort the list.
+#[derive(Clone)]
+struct RowData {
+    stage: bool,
+    name: String,
+    status: String,
+    added: String,
+    deleted: String,
+    path: String,
+    in_head: bool,
+    staged: bool,
+    old_path: String,
+}
+
+fn read_row_data(store: &gtk::ListStore) -> Vec<RowData> {
+    let mut rows = Vec::new();
+    let mut iter = store.iter_first();
+    while let Some(mut i) = iter {
+        rows.push(RowData {
+            stage: store.get(&i, W_STAGE as i32),
+            name: store.get(&i, W_NAME as i32),
+            status: store.get(&i, W_STATUS as i32),
+            added: store.get(&i, W_ADDED as i32),
+            deleted: store.get(&i, W_DELETED as i32),
+            path: store.get(&i, W_PATH as i32),
+            in_head: store.get(&i, W_IN_HEAD as i32),
+            staged: store.get(&i, W_STAGED as i32),
+            old_path: store.get(&i, W_OLD_PATH as i32),
+        });
+        iter = store.iter_next(&mut i).then_some(i);
+    }
+    rows
+}
+
+fn write_row_data(store: &gtk::ListStore, rows: &[RowData]) {
+    store.clear();
+    for r in rows {
+        let iter = store.append();
+        store.set(
+            &iter,
+            &[
+                (W_STAGE, &r.stage),
+                (W_NAME, &r.name),
+                (W_STATUS, &r.status),
+                (W_ADDED, &r.added),
+                (W_DELETED, &r.deleted),
+                (W_PATH, &r.path),
+                (W_IN_HEAD, &r.in_head),
+                (W_STAGED, &r.staged),
+                (W_OLD_PATH, &r.old_path),
+            ],
+        );
+    }
+}
+
+/// Numeric value of an added/deleted cell; "•" (binary file) has no count
+/// and sorts before all numbers.
+fn parse_num(s: &str) -> i64 {
+    s.parse().unwrap_or(i64::MIN)
+}
+
+/// Re-sort the file list in place by a store column: name and status compare
+/// alphabetically, added/deleted numerically. Ties keep the incoming (git)
+/// order, so descending is a reversed stable sort done via a flipped compare.
+fn sort_store(store: &gtk::ListStore, col: u32, ascending: bool) {
+    let cmp: fn(&RowData, &RowData) -> std::cmp::Ordering = match col {
+        W_NAME => |a, b| a.name.cmp(&b.name),
+        W_STATUS => |a, b| a.status.cmp(&b.status),
+        W_ADDED => |a, b| parse_num(&a.added).cmp(&parse_num(&b.added)),
+        W_DELETED => |a, b| parse_num(&a.deleted).cmp(&parse_num(&b.deleted)),
+        _ => return,
+    };
+    let mut rows = read_row_data(store);
+    rows.sort_by(|a, b| {
+        if ascending {
+            cmp(a, b)
+        } else {
+            cmp(b, a)
+        }
+    });
+    write_row_data(store, &rows);
+}
+
+/// The sort column can change while rows are replaced (refresh, amend
+/// toggle); re-apply the current sort so the display order is stable. The
+/// sort indicator on the column header is unaffected by store changes.
+fn apply_sort(store: &gtk::ListStore, state: &Cell<Option<(u32, bool)>>) {
+    if let Some((col, ascending)) = state.get() {
+        sort_store(store, col, ascending);
+    }
+}
+
 /// True when the list is non-empty and every row is checked.
 fn rows_all_checked(store: &gtk::ListStore) -> bool {
     let Some(mut i) = store.iter_first() else {
@@ -239,6 +333,11 @@ fn main() -> ExitCode {
             glib::Type::STRING,
         ]);
         let files_tree = gtk::TreeView::builder().model(&files_store).build();
+        // current sort of the file list: (store column, ascending); the
+        // list opens sorted by file name ascending, the column-header click
+        // handlers below change it and refreshes re-apply it
+        let sort_state: Rc<Cell<Option<(u32, bool)>>> =
+            Rc::new(Cell::new(Some((W_NAME, true))));
 
         let toggle = gtk::CellRendererToggle::new();
         let stage_col = gtk::TreeViewColumn::builder().title("").build();
@@ -270,6 +369,8 @@ fn main() -> ExitCode {
         name_col.set_fixed_width(320);
         files_tree.append_column(&name_col);
 
+        // sortable columns: (widget, store column) for the handlers below
+        let mut sort_cols = vec![(name_col, W_NAME)];
         for (col, title) in [
             (W_STATUS, t!("col.status")),
             (W_ADDED, t!("file.added")),
@@ -281,8 +382,11 @@ fn main() -> ExitCode {
             column.add_attribute(&cell, "text", col as i32);
             column.set_sizing(gtk::TreeViewColumnSizing::Fixed);
             column.set_fixed_width(90);
-            column.set_alignment(1.0);
+            // NOTE: no set_alignment(1.0): GTK draws the header sort arrow
+            // on the side opposite to the column alignment, so keeping all
+            // columns left-aligned puts every arrow on the right
             files_tree.append_column(&column);
+            sort_cols.push((column, col));
         }
 
         let files_scroll = gtk::ScrolledWindow::builder()
@@ -413,6 +517,46 @@ fn main() -> ExitCode {
         // ---- file list behaviour ------------------------------------------------
         // initial list: working-copy changes vs HEAD, pre-checked if staged
         add_file_rows(&files_store, &gl::worktree_changes(&repo), |f| f.staged);
+        apply_sort(&files_store, &sort_state);
+
+        // ---- sortable columns ----------------------------------------------
+        // Clicking a column header sorts the list by that column (name and
+        // status alphabetically, +/- numerically); clicking the same header
+        // again reverses the order. GTK 4's TreeView has no built-in header
+        // sorting, so the handlers re-order the ListStore itself (see
+        // sort_store) and only use the column for the click signal and the
+        // sort arrow in the header.
+        let all_cols: Rc<Vec<gtk::TreeViewColumn>> =
+            Rc::new(sort_cols.iter().map(|(c, _)| c.clone()).collect());
+        for (column, col_idx) in sort_cols {
+            column.set_clickable(true);
+            // the initial sort (file name ascending) gets its header arrow
+            if col_idx == W_NAME {
+                column.set_sort_indicator(true);
+                column.set_sort_order(gtk::SortType::Ascending);
+            }
+            let store = files_store.clone();
+            let state = sort_state.clone();
+            let others = all_cols.clone();
+            column.connect_clicked(move |col| {
+                let ascending = match state.get() {
+                    Some((c, asc)) if c == col_idx => !asc,
+                    _ => true,
+                };
+                state.set(Some((col_idx, ascending)));
+                sort_store(&store, col_idx, ascending);
+                // only the active sort column shows the header arrow
+                for c in others.iter() {
+                    c.set_sort_indicator(false);
+                }
+                col.set_sort_indicator(true);
+                col.set_sort_order(if ascending {
+                    gtk::SortType::Ascending
+                } else {
+                    gtk::SortType::Descending
+                });
+            });
+        }
 
         // clicking the (small) stage column header checks all rows, or
         // unchecks all when every row was already checked; store value
@@ -456,6 +600,7 @@ fn main() -> ExitCode {
             let buffer = message_view.buffer().clone();
             let repo = repo.clone();
             let head = head_toggle.clone();
+            let sort = sort_state.clone();
             amend_check.connect_toggled(move |check| {
                 if check.is_active() {
                     // pre-fill the previous commit's message, but never
@@ -471,6 +616,7 @@ fn main() -> ExitCode {
                     buffer.set_text("");
                     add_file_rows(&store, &gl::worktree_changes(&repo), |f| f.staged);
                 }
+                apply_sort(&store, &sort);
                 sync_head_checkbox(&store, &head);
             });
         }
@@ -491,6 +637,7 @@ fn main() -> ExitCode {
             let amend_check = amend_check.clone();
             let repo = repo.clone();
             let head = head_toggle.clone();
+            let sort = sort_state.clone();
             // meld writes into the working tree, so refresh the row data
             // (status, +/- counts) whenever the window regains focus
             let focus = gtk::EventControllerFocus::new();
@@ -498,6 +645,7 @@ fn main() -> ExitCode {
                 if !amend_check.is_active() {
                     refresh_file_rows(&store, &repo);
                 }
+                apply_sort(&store, &sort);
                 sync_head_checkbox(&store, &head);
             });
             window.add_controller(focus);
