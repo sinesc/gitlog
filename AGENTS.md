@@ -2,7 +2,7 @@
 
 GTK4 toolset for working with git. The name "gitlog" is historic: the
 crate ships several binaries (`src/bin/`): `gitlog` (history viewer), `gitcommit`,
-`gitpush`, `gitrebase`. Shared logic lives in the library crate (`src/`).
+`gitpush`, `gitpull`, `gitrebase`. Shared logic lives in the library crate (`src/`).
 
 ## Stack & Gotchas
 

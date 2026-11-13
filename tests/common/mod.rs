@@ -124,6 +124,8 @@ pub fn fixture_repo(tag: &str) -> PathBuf {
 }
 
 /// Bare repository used as a "remote" (temporary directory suffixed `-<tag>`).
+/// `main` is pushed from a source repo first, then HEAD is pointed at it
+/// (see the note in the function body), so `git clone` yields `main`.
 pub fn bare_remote(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "gitlog-test-{}-{}-bare",
@@ -135,10 +137,9 @@ pub fn bare_remote(tag: &str) -> PathBuf {
         .args(["init", "--bare", "-q", &dir.to_string_lossy()])
         .output()
         .expect("failed to run git");
-    assert!(
-        out.status.success(),
-        "git init --bare failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success());
+    // point HEAD at the pushed branch so clones start on `main` (the
+    // built-in default of `git init --bare` is the legacy `master`)
+    git(&dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     dir
 }

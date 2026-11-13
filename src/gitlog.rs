@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -406,11 +406,13 @@ pub fn head_message(repo: &Path) -> Option<String> {
     Some(message.trim_end_matches('\n').to_string())
 }
 
-/// Runs a git command; returns the trimmed stderr on failure.
-pub fn run_git(repo: &Path, args: &[&str]) -> Result<(), String> {
+/// Runs a git command with extra environment variables; returns the
+/// trimmed stderr on failure.
+pub fn run_git_env(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<(), String> {
     let output = Command::new("git")
         .args(["-C", &repo.to_string_lossy()])
         .args(args)
+        .envs(env.iter().copied())
         .stderr(Stdio::piped())
         .output()
         .map_err(|e| e.to_string())?;
@@ -420,6 +422,137 @@ pub fn run_git(repo: &Path, args: &[&str]) -> Result<(), String> {
         let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(if msg.is_empty() { "git command failed".into() } else { msg })
     }
+}
+
+/// Runs a git command; returns the trimmed stderr on failure.
+pub fn run_git(repo: &Path, args: &[&str]) -> Result<(), String> {
+    run_git_env(repo, args, &[])
+}
+
+// ---- pull / fetch support (see dev/gitpull-plan.md) -------------------------
+
+/// Remote and branch of the current branch's upstream, e.g.
+/// ("origin", "main"). `None` on a detached HEAD or without upstream.
+/// Git forbids slashes in remote names, so the first slash separates the
+/// two parts; the branch part itself may contain slashes.
+pub fn upstream_of(repo: &Path) -> Option<(String, String)> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let (remote, branch) = text.split_once('/')?;
+    Some((remote.to_string(), branch.to_string()))
+}
+
+/// Absolute path of the git directory (also correct for worktrees, where
+/// `.git` is a file pointing at the real location).
+pub fn git_dir(repo: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "rev-parse", "--absolute-git-dir"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(PathBuf::from(
+        String::from_utf8_lossy(&output.stdout).trim(),
+    ))
+}
+
+/// True while a merge is stopped mid-conflict (`MERGE_HEAD` exists).
+pub fn merge_in_progress(repo: &Path) -> bool {
+    git_dir(repo)
+        .map(|d| d.join("MERGE_HEAD").exists())
+        .unwrap_or(false)
+}
+
+/// Progress of a running rebase: (step, total, head branch). Reads the
+/// state directory of the modern "merge" backend (`rebase-merge/`) first
+/// and falls back to the legacy `rebase-apply/` names. `None` when no
+/// rebase is in progress.
+pub fn rebase_progress(repo: &Path) -> Option<(u32, u32, String)> {
+    let dir = git_dir(repo)?;
+    let read = |d: &Path, num_file: &str, total_file: &str| -> Option<(u32, u32, String)> {
+        let step: u32 = std::fs::read_to_string(d.join(num_file)).ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        let total: u32 = std::fs::read_to_string(d.join(total_file)).ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        let head = std::fs::read_to_string(d.join("head-name")).ok()?;
+        let head = head.trim();
+        let head = head.strip_prefix("refs/heads/").unwrap_or(head).to_string();
+        Some((step, total, head))
+    };
+    read(&dir.join("rebase-merge"), "msgnum", "end")
+        .or_else(|| read(&dir.join("rebase-apply"), "num", "total"))
+}
+
+/// Unmerged (conflicted) paths from `git status --porcelain=v1 -uall`,
+/// each with its XY status code (`"UU"`, `"AA"`, `"DD"`, `"AU"`, `"UA"`,
+/// `"DU"`, `"UD"`, `"AT"`, `"TA"`).
+pub fn unmerged_files(repo: &Path) -> Vec<(String, String)> {
+    let Ok(output) = Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "-c",
+            "core.quotepath=false",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        // porcelain lines are "XY <path>"
+        .filter_map(|line| {
+            let xy = line.get(..2)?;
+            let path = line.get(3..)?;
+            let conflicted =
+                xy.contains('U') || xy == "AA" || xy == "DD" || xy == "AT" || xy == "TA";
+            conflicted.then(|| (path.to_string(), xy.to_string()))
+        })
+        .collect()
+}
+
+/// The three conflict stages of a path: base (`:1`), ours (`:2`),
+/// theirs (`:3`). Missing stages (add/add has no base, a delete lacks
+/// one side) come back as `None`.
+pub fn conflict_blobs(repo: &Path, path: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>) {
+    let blob = |stage: u8| {
+        Command::new("git")
+            .args(["-C", &repo.to_string_lossy(), "show", &format!(":{stage}:{path}")])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| o.stdout)
+    };
+    (blob(1), blob(2), blob(3))
+}
+
+/// Finish a resolved merge with git's auto-generated merge message
+/// (`--no-edit` avoids spawning an editor).
+pub fn commit_merge(repo: &Path) -> Result<(), String> {
+    run_git(repo, &["commit", "--no-edit"])
+}
+
+/// Continue a resolved rebase step. `GIT_EDITOR=true` auto-confirms the
+/// pre-filled commit message, so no interactive editor is spawned.
+pub fn rebase_continue(repo: &Path) -> Result<(), String> {
+    run_git_env(repo, &["rebase", "--continue"], &[("GIT_EDITOR", "true")])
 }
 
 /// Stage the working-tree state of one path.

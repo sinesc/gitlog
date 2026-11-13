@@ -6,6 +6,8 @@ inspired by TortoiseGit. Currently included tools:
 - `gitlog`: Searchable git history, shows details for selected commit.
 - `gitcommit`: Commit window, supports amending.
 - `gitpush`: Push to remotes, supports including tags, force [with lease], ...
+- `gitpull`: Fetch/pull from a remote (fetch only / merge / rebase) with a
+  conflicts window (3-way meld, commit merge, continue-rebase loop), ...
 - `gitrebase`: Currently only used for editing commit details (message/author/...)
 
 Currently supported file managers:
@@ -35,13 +37,13 @@ are not installed; add `--install-system-deps` to install them via apt
 Builds the project (arguments are passed to `build.sh`, e.g.
 `./install.sh --install-system-deps`), then installs:
 
-- `gitlog` / `gitcommit` / `gitpush` / `gitrebase` → `~/.local/bin`
+- `gitlog` / `gitcommit` / `gitpush` / `gitpull` / `gitrebase` → `~/.local/bin`
 - `gitlog.nemo_action` / `gitcommit.nemo_action` /
-  `gitpush.nemo_action` / `check-git-dir.sh` →
+  `gitpush.nemo_action` / `gitpull.nemo_action` / `check-git-dir.sh` →
   `~/.local/share/nemo/actions`
 
 The Nemo context menu actions (right-click a directory) run `gitlog %F`,
-`gitcommit %F` and `gitpush %F`. They only show up on directories that contain a
+`gitcommit %F`, `gitpush %F` and `gitpull %F`. They only show up on directories that contain a
 `.git` entry. Make sure `~/.local/bin` is in your `PATH` and restart Nemo
 (e.g. log out/in) after installing.
 
@@ -51,6 +53,7 @@ The Nemo context menu actions (right-click a directory) run `gitlog %F`,
 target/release/gitlog [/path/to/project]      # commit history (default: current folder)
 target/release/gitcommit [/path/to/project]   # commit window
 target/release/gitpush [/path/to/project]     # push window
+target/release/gitpull [/path/to/project]     # pull window
 target/release/gitrebase [/path/to/project] <commit-hash>   # edit commit details
 ```
 

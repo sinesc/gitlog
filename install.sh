@@ -17,6 +17,7 @@ mkdir -p "$BIN_DIR"
 install -m 0755 target/release/gitlog    "$BIN_DIR/gitlog"
 install -m 0755 target/release/gitcommit "$BIN_DIR/gitcommit"
 install -m 0755 target/release/gitpush   "$BIN_DIR/gitpush"
+install -m 0755 target/release/gitpull   "$BIN_DIR/gitpull"
 install -m 0755 target/release/gitrebase "$BIN_DIR/gitrebase"
 
 # --- install nemo actions ----------------------------------------------------
@@ -32,13 +33,13 @@ fi
 lang="${raw_locale%%[._-]*}"
 lang="${lang,,}"
 case "$lang" in
-  de) gitlog_comment="Zeigt das Git Log für den Ordner";          gitcommit_comment="Öffnet das Git Commit-Fenster für den Ordner"; gitpush_comment="Öffnet das Git Push-Fenster für den Ordner" ;;
-  fr) gitlog_comment="Affiche l'historique git du dossier";      gitcommit_comment="Ouvre la fenêtre de commit git du dossier";        gitpush_comment="Ouvre la fenêtre de push git du dossier" ;;
-  es) gitlog_comment="Muestra el registro git de la carpeta";    gitcommit_comment="Abre la ventana de commit de git de la carpeta"; gitpush_comment="Abre la ventana de push de git de la carpeta" ;;
-  it) gitlog_comment="Mostra la cronologia git della cartella";  gitcommit_comment="Apre la finestra di commit git della cartella";  gitpush_comment="Apre la finestra di push git della cartella" ;;
-  nl) gitlog_comment="Toont de git-log van de map";              gitcommit_comment="Opent het git-commitvenster van de map";        gitpush_comment="Opent het git-pushvenster van de map" ;;
-  pt) gitlog_comment="Mostra o log do git da pasta";             gitcommit_comment="Abre a janela de commit do git da pasta";       gitpush_comment="Abre a janela de push do git da pasta" ;;
-  *)  gitlog_comment="Shows the git log for the folder";         gitcommit_comment="Opens the git commit window for the folder";    gitpush_comment="Opens the git push window for the folder" ;;
+  de) gitlog_comment="Zeigt das Git Log für den Ordner";          gitcommit_comment="Öffnet das Git Commit-Fenster für den Ordner"; gitpush_comment="Öffnet das Git Push-Fenster für den Ordner";  gitpull_comment="Öffnet das Git Pull-Fenster für den Ordner" ;;
+  fr) gitlog_comment="Affiche l'historique git du dossier";      gitcommit_comment="Ouvre la fenêtre de commit git du dossier";        gitpush_comment="Ouvre la fenêtre de push git du dossier";    gitpull_comment="Ouvre la fenêtre de pull git du dossier" ;;
+  es) gitlog_comment="Muestra el registro git de la carpeta";    gitcommit_comment="Abre la ventana de commit de git de la carpeta"; gitpush_comment="Abre la ventana de push de git de la carpeta"; gitpull_comment="Abre la ventana de pull de git de la carpeta" ;;
+  it) gitlog_comment="Mostra la cronologia git della cartella";  gitcommit_comment="Apre la finestra di commit git della cartella";  gitpush_comment="Apre la finestra di push git della cartella"; gitpull_comment="Apre la finestra di pull git della cartella" ;;
+  nl) gitlog_comment="Toont de git-log van de map";              gitcommit_comment="Opent het git-commitvenster van de map";        gitpush_comment="Opent het git-pushvenster van de map";      gitpull_comment="Opent het git-pullvenster van de map" ;;
+  pt) gitlog_comment="Mostra o log do git da pasta";             gitcommit_comment="Abre a janela de commit do git da pasta";       gitpush_comment="Abre a janela de push do git da pasta";    gitpull_comment="Abre a janela de pull do git da pasta" ;;
+  *)  gitlog_comment="Shows the git log for the folder";         gitcommit_comment="Opens the git commit window for the folder";    gitpush_comment="Opens the git push window for the folder";    gitpull_comment="Opens the git pull window for the folder" ;;
 esac
 
 install_action() { # $1 = source file, $2 = comment translation
@@ -52,6 +53,7 @@ mkdir -p "$NEMO_ACTIONS_DIR"
 install_action res/gitlog.nemo_action    "$gitlog_comment"
 install_action res/gitcommit.nemo_action "$gitcommit_comment"
 install_action res/gitpush.nemo_action   "$gitpush_comment"
+install_action res/gitpull.nemo_action   "$gitpull_comment"
 install -m 0755 res/check-git-dir.sh     "$NEMO_ACTIONS_DIR/check-git-dir.sh"
 
 echo
@@ -59,9 +61,11 @@ echo "Installed:"
 echo "  $BIN_DIR/gitlog"
 echo "  $BIN_DIR/gitcommit"
 echo "  $BIN_DIR/gitpush"
+echo "  $BIN_DIR/gitpull"
 echo "  $NEMO_ACTIONS_DIR/gitlog.nemo_action"
 echo "  $NEMO_ACTIONS_DIR/gitcommit.nemo_action"
 echo "  $NEMO_ACTIONS_DIR/gitpush.nemo_action"
+echo "  $NEMO_ACTIONS_DIR/gitpull.nemo_action"
 echo "  $NEMO_ACTIONS_DIR/check-git-dir.sh"
 echo
 echo "Make sure $BIN_DIR is in your PATH, then restart Nemo"

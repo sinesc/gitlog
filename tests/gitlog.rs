@@ -6,6 +6,7 @@ mod common;
 
 use common::*;
 use gitlog::gitlog::*;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
@@ -472,4 +473,361 @@ fn is_pushed_check() {
     assert!(is_pushed(&dir, "HEAD"));
     assert!(is_pushed(&dir, "HEAD~1"));
     assert!(is_pushed(&dir, "HEAD~2"));
+}
+
+// ---- gitpull support (see dev/gitpull-plan.md) -------------------------------
+
+/// Repo with one content commit pushed to a bare origin, plus a second
+/// working clone `work2` of that remote. Returns (repo, origin, work2).
+fn pull_repo(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let dir = init_repo(&format!("pull-{tag}"));
+    write(&dir, "a.txt", "base\n");
+    git(&dir, &["add", "a.txt"]);
+    git(&dir, &["commit", "-qm", "base"]);
+    let origin = bare_remote(&format!("pull-{tag}-origin"));
+    git(&dir, &["remote", "add", "origin", &origin.to_string_lossy()]);
+    git(&dir, &["push", "-q", "--set-upstream", "origin", "main"]);
+
+    let work2 = temp_dir(&format!("pull-{tag}-work2"));
+    std::fs::remove_dir_all(&work2).unwrap();
+    let out = std::process::Command::new("git")
+        .args([
+            "clone",
+            "-q",
+            &origin.to_string_lossy(),
+            &work2.to_string_lossy(),
+        ])
+        .output()
+        .expect("failed to run git clone");
+    assert!(
+        out.status.success(),
+        "git clone failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    configure_identity(&work2);
+    (dir, origin, work2)
+}
+
+/// Appends `text` to `file` (creating it when missing), commits and
+/// pushes in `repo`.
+fn commit_and_push(repo: &Path, file: &str, text: &str, msg: &str) {
+    let path = repo.join(file);
+    let mut content = std::fs::read_to_string(&path).unwrap_or_default();
+    content.push_str(text);
+    std::fs::write(&path, content).unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", msg]);
+    run_git(repo, &["push", "-q", "origin", "main"]).unwrap();
+}
+
+const EDITOR_TRUE: [(&str, &str); 1] = [("GIT_EDITOR", "true")];
+
+#[test]
+fn upstream_of_check() {
+    let (dir, _origin, _work2) = pull_repo("upstream");
+    // push -u above recorded the tracking branch
+    assert_eq!(
+        upstream_of(&dir),
+        Some(("origin".to_string(), "main".to_string()))
+    );
+    // detached HEAD has no upstream
+    git(&dir, &["checkout", "-q", "--detach"]);
+    assert_eq!(upstream_of(&dir), None);
+    // a branch without tracking config has none either
+    git(&dir, &["checkout", "-qb", "loose"]);
+    assert_eq!(upstream_of(&dir), None);
+}
+
+#[test]
+fn merge_conflict_resolve_and_commit() {
+    let (dir, _origin, work2) = pull_repo("conflict");
+    // diverging edits of a.txt
+    commit_and_push(&work2, "a.txt", "theirs\n", "work2 edit");
+    std::fs::write(dir.join("a.txt"), "base\nours\n").unwrap();
+    git(&dir, &["add", "a.txt"]);
+    git(&dir, &["commit", "-qm", "ours edit"]);
+
+    run_git(&dir, &["fetch", "origin"]).unwrap();
+    assert!(run_git_env(&dir, &["merge", "origin/main"], &EDITOR_TRUE).is_err());
+    assert!(merge_in_progress(&dir));
+    assert_eq!(
+        unmerged_files(&dir),
+        vec![("a.txt".to_string(), "UU".to_string())]
+    );
+    // the three stages are the merge base and both sides
+    let (base, ours, theirs) = conflict_blobs(&dir, "a.txt");
+    assert_eq!(base.as_deref(), Some("base\n".as_bytes()));
+    assert_eq!(ours.as_deref(), Some("base\nours\n".as_bytes()));
+    assert_eq!(theirs.as_deref(), Some("base\ntheirs\n".as_bytes()));
+
+    // abort clears the whole merge state
+    run_git(&dir, &["merge", "--abort"]).unwrap();
+    assert!(!merge_in_progress(&dir));
+    assert!(unmerged_files(&dir).is_empty());
+
+    // merge again, resolve the file and create the merge commit
+    assert!(run_git_env(&dir, &["merge", "origin/main"], &EDITOR_TRUE).is_err());
+    std::fs::write(dir.join("a.txt"), "base\nours\ntheirs\n").unwrap();
+    stage_path(&dir, "a.txt").unwrap();
+    assert!(unmerged_files(&dir).is_empty());
+    assert!(merge_in_progress(&dir)); // MERGE_HEAD stays until the commit
+    commit_merge(&dir).unwrap();
+    assert!(!merge_in_progress(&dir));
+    let parents = git_out(&dir, &["log", "-1", "--format=%P"]);
+    assert_eq!(parents.split_whitespace().count(), 2, "two-parent merge commit");
+    assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
+}
+
+#[test]
+fn unmerged_status_codes() {
+    // AA: both sides add the same file (no merge base stage)
+    let dir = init_repo("conf-aa");
+    write(&dir, "a.txt", "base\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "base"]);
+    git(&dir, &["checkout", "-qb", "side"]);
+    write(&dir, "n.txt", "theirs\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "side add"]);
+    git(&dir, &["checkout", "-q", "main"]);
+    write(&dir, "n.txt", "ours\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "ours add"]);
+    assert!(run_git_env(&dir, &["merge", "side"], &EDITOR_TRUE).is_err());
+    assert_eq!(
+        unmerged_files(&dir),
+        vec![("n.txt".to_string(), "AA".to_string())]
+    );
+    let (base, _ours, _theirs) = conflict_blobs(&dir, "n.txt");
+    assert_eq!(base, None);
+    run_git(&dir, &["merge", "--abort"]).unwrap();
+
+    // DU: we deleted the file, the other side modified it
+    let dir = init_repo("conf-du");
+    write(&dir, "f.txt", "v1\n");
+    write(&dir, "a.txt", "a\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "base"]);
+    git(&dir, &["checkout", "-qb", "side"]);
+    write(&dir, "f.txt", "v1\nmodified\n");
+    git(&dir, &["commit", "-am", "side modify"]);
+    git(&dir, &["checkout", "-q", "main"]);
+    std::fs::remove_file(dir.join("f.txt")).unwrap();
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "main delete"]);
+    assert!(run_git_env(&dir, &["merge", "side"], &EDITOR_TRUE).is_err());
+    assert_eq!(
+        unmerged_files(&dir),
+        vec![("f.txt".to_string(), "DU".to_string())]
+    );
+    // deleting the file resolves it (git rm == stage the deletion)
+    run_git(&dir, &["rm", "-q", "-f", "f.txt"]).unwrap();
+    commit_merge(&dir).unwrap();
+    assert!(!dir.join("f.txt").exists());
+
+    // UD: we modified the file, the other side deleted it
+    let dir = init_repo("conf-ud");
+    write(&dir, "f.txt", "v1\n");
+    write(&dir, "a.txt", "a\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "base"]);
+    git(&dir, &["checkout", "-qb", "side"]);
+    std::fs::remove_file(dir.join("f.txt")).unwrap();
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "side delete"]);
+    git(&dir, &["checkout", "-q", "main"]);
+    write(&dir, "f.txt", "v1\nmodified\n");
+    git(&dir, &["commit", "-am", "main modify"]);
+    assert!(run_git_env(&dir, &["merge", "side"], &EDITOR_TRUE).is_err());
+    assert_eq!(
+        unmerged_files(&dir),
+        vec![("f.txt".to_string(), "UD".to_string())]
+    );
+    run_git(&dir, &["merge", "--abort"]).unwrap();
+    // (a plain "both deleted" DD is not exercised: git auto-resolves
+    // symmetric deletions, so it needs a crisscross history)
+}
+
+#[test]
+fn rebase_progress_and_continue_loop() {
+    let (dir, _origin, work2) = pull_repo("rebase-loop");
+    // remote and local edits append at the same line -> both local
+    // commits conflict with the remote commit
+    commit_and_push(&work2, "a.txt", "remote1\n", "remote edit");
+    std::fs::write(dir.join("a.txt"), "base\nours1\n").unwrap();
+    git(&dir, &["add", "a.txt"]);
+    git(&dir, &["commit", "-qm", "local 1"]);
+    std::fs::write(dir.join("a.txt"), "base\nours1-mod\n").unwrap();
+    git(&dir, &["add", "a.txt"]);
+    git(&dir, &["commit", "-qm", "local 2"]);
+
+    assert!(
+        run_git_env(&dir, &["pull", "--rebase", "origin", "main"], &EDITOR_TRUE).is_err()
+    );
+    assert_eq!(rebase_progress(&dir), Some((1, 2, "main".to_string())));
+    assert_eq!(
+        unmerged_files(&dir),
+        vec![("a.txt".to_string(), "UU".to_string())]
+    );
+    // resolve the first step; the continue applies it and hits the
+    // second conflict (continue fails, the rebase stays in progress)
+    std::fs::write(dir.join("a.txt"), "base\nremote1\nours1\n").unwrap();
+    stage_path(&dir, "a.txt").unwrap();
+    assert!(rebase_continue(&dir).is_err());
+    assert_eq!(rebase_progress(&dir), Some((2, 2, "main".to_string())));
+    assert_eq!(
+        unmerged_files(&dir),
+        vec![("a.txt".to_string(), "UU".to_string())]
+    );
+    // resolve the second step; the rebase finishes
+    std::fs::write(dir.join("a.txt"), "base\nremote1\nours1-mod\n").unwrap();
+    stage_path(&dir, "a.txt").unwrap();
+    rebase_continue(&dir).unwrap();
+    assert_eq!(rebase_progress(&dir), None);
+    assert_eq!(
+        git_out(&dir, &["log", "--format=%s"]).lines().collect::<Vec<_>>(),
+        ["local 2", "local 1", "remote edit", "base"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+        "base\nremote1\nours1-mod\n"
+    );
+    assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
+}
+
+#[test]
+fn rebase_abort_clears_state() {
+    let (dir, _origin, work2) = pull_repo("rebase-abort");
+    commit_and_push(&work2, "a.txt", "remote1\n", "remote edit");
+    std::fs::write(dir.join("a.txt"), "base\nours1\n").unwrap();
+    git(&dir, &["add", "a.txt"]);
+    git(&dir, &["commit", "-qm", "local 1"]);
+
+    assert!(
+        run_git_env(&dir, &["pull", "--rebase", "origin", "main"], &EDITOR_TRUE).is_err()
+    );
+    assert!(rebase_progress(&dir).is_some());
+    run_git(&dir, &["rebase", "--abort"]).unwrap();
+    assert_eq!(rebase_progress(&dir), None);
+    assert!(unmerged_files(&dir).is_empty());
+    assert_eq!(rev(&dir, "HEAD"), rev(&dir, "refs/heads/main"));
+    assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
+}
+
+#[test]
+fn pull_fetch_flags_e2e() {
+    let (dir, origin, work2) = pull_repo("fetch-e2e");
+    // a plain fetch only updates the remote-tracking refs
+    commit_and_push(&work2, "a.txt", "remote\n", "remote edit");
+    run_git(&dir, &["fetch", "origin"]).unwrap();
+    assert_eq!(rev(&dir, "refs/remotes/origin/main"), rev(&work2, "HEAD"));
+    // the local branch stayed untouched
+    assert_ne!(rev(&dir, "refs/heads/main"), rev(&dir, "refs/remotes/origin/main"));
+
+    // --tags fetches the tags as well
+    git(&work2, &["tag", "v9"]);
+    git(&work2, &["push", "-q", "--tags", "origin"]);
+    run_git(&dir, &["fetch", "--tags", "origin"]).unwrap();
+    assert_eq!(rev(&dir, "refs/tags/v9"), rev(&work2, "HEAD"));
+
+    // --prune drops the remote-tracking branch of a deleted remote branch
+    git(&work2, &["push", "-q", "origin", "HEAD:refs/heads/topic"]);
+    run_git(&dir, &["fetch", "origin"]).unwrap();
+    rev(&dir, "refs/remotes/origin/topic");
+    git(&origin, &["update-ref", "-d", "refs/heads/topic"]);
+    run_git(&dir, &["fetch", "--prune", "origin"]).unwrap();
+    assert!(
+        git_out(&dir, &["for-each-ref", "refs/remotes/origin/topic"])
+            .trim()
+            .is_empty()
+    );
+}
+
+#[test]
+fn pull_merge_flags_e2e() {
+    let (dir, _origin, work2) = pull_repo("merge-e2e");
+    // fast-forward merge pull
+    commit_and_push(&work2, "a.txt", "remote\n", "remote edit");
+    run_git_env(
+        &dir,
+        &["pull", "--no-rebase", "--no-edit", "origin", "main"],
+        &EDITOR_TRUE,
+    )
+    .unwrap();
+    assert_eq!(rev(&dir, "HEAD"), rev(&work2, "HEAD"));
+
+    // diverging: --ff-only is rejected, --no-ff creates a merge commit
+    commit_and_push(&work2, "c.txt", "c\n", "remote c");
+    write(&dir, "b.txt", "b\n");
+    git(&dir, &["add", "b.txt"]);
+    git(&dir, &["commit", "-qm", "local b"]);
+    assert!(
+        run_git_env(
+            &dir,
+            &["pull", "--no-rebase", "--ff-only", "--no-edit", "origin", "main"],
+            &EDITOR_TRUE
+        )
+        .is_err()
+    );
+    run_git_env(
+        &dir,
+        &["pull", "--no-rebase", "--no-ff", "--no-edit", "origin", "main"],
+        &EDITOR_TRUE
+    )
+    .unwrap();
+    let parents = git_out(&dir, &["log", "-1", "--format=%P"]);
+    assert_eq!(parents.split_whitespace().count(), 2);
+    // git's auto merge message (via pull it names the fetched branch)
+    assert!(git_out(&dir, &["log", "--format=%s"])
+        .lines()
+        .next()
+        .unwrap()
+        .starts_with("Merge "));
+    assert!(dir.join("c.txt").exists());
+    assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
+}
+
+#[test]
+fn pull_squash_stages_without_commit() {
+    let (dir, _origin, work2) = pull_repo("squash-e2e");
+    commit_and_push(&work2, "a.txt", "remote\n", "remote edit");
+    write(&dir, "b.txt", "b\n");
+    git(&dir, &["add", "b.txt"]);
+    git(&dir, &["commit", "-qm", "local b"]);
+    let head_before = rev(&dir, "HEAD");
+
+    run_git_env(
+        &dir,
+        &["pull", "--no-rebase", "--squash", "origin", "main"],
+        &EDITOR_TRUE
+    )
+    .unwrap();
+
+    // the combined changes are staged, no commit and no MERGE_HEAD
+    assert_eq!(rev(&dir, "HEAD"), head_before);
+    assert!(!merge_in_progress(&dir));
+    assert!(!git_out(&dir, &["diff", "--cached", "--name-only", "HEAD"])
+        .trim()
+        .is_empty());
+    assert_eq!(unmerged_files(&dir), Vec::new());
+}
+
+#[test]
+fn pull_rebase_rewrites_local_commits() {
+    let (dir, _origin, work2) = pull_repo("rebase-clean");
+    commit_and_push(&work2, "c.txt", "c\n", "remote c");
+    write(&dir, "b.txt", "b\n");
+    git(&dir, &["add", "b.txt"]);
+    git(&dir, &["commit", "-qm", "local b"]);
+
+    run_git_env(&dir, &["pull", "--rebase", "origin", "main"], &EDITOR_TRUE).unwrap();
+
+    assert_eq!(
+        git_out(&dir, &["log", "--format=%s"]).lines().collect::<Vec<_>>(),
+        ["local b", "remote c", "base"]
+    );
+    assert_eq!(rebase_progress(&dir), None);
+    assert!(dir.join("b.txt").exists());
+    assert!(dir.join("c.txt").exists());
+    assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
 }
