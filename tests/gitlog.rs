@@ -831,3 +831,233 @@ fn pull_rebase_rewrites_local_commits() {
     assert!(dir.join("c.txt").exists());
     assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
 }
+
+// ---- rebase drops a local commit (see dev/gitpull-dropped-commits-plan.md) --
+
+/// Emulates gitcommit's "amend with an unchecked file": the file's change
+/// is reset to the parent commit and the work-tree copy restored, so the
+/// work tree stays clean (a dirty work tree makes `pull --rebase` refuse
+/// loudly instead of dropping silently).
+fn uncommit_path_and_clean(repo: &Path, file: &str) {
+    run_git(repo, &["restore", "--staged", "--source=HEAD^", "--", file]).unwrap();
+    run_git(repo, &["commit", "-q", "--amend", "--no-edit"]).unwrap();
+    let _ = run_git(repo, &["restore", "--source=HEAD", "--worktree", "--", file]);
+}
+
+/// `git show <c> | git patch-id --stable` through the test helpers.
+fn test_patch_id(repo: &Path, c: &str) -> String {
+    let shown = std::process::Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "show", c])
+        .output()
+        .unwrap();
+    let mut child = std::process::Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "patch-id", "--stable"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    child.stdin.take().unwrap().write_all(&shown.stdout).unwrap();
+    let out = child.wait_with_output().unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn local_commits_lists_subjects_and_patch_ids() {
+    let (dir, _origin, _work2) = pull_repo("local-commits");
+    write(&dir, "a.txt", "base\na1\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "first local"]);
+    write(&dir, "c.txt", "c\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "second local"]);
+
+    let list = local_commits(&dir, "origin/main", "HEAD");
+    assert_eq!(
+        list.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(),
+        ["second local", "first local"],
+        "newest first"
+    );
+    for c in &list {
+        assert!(!c.patch_id.is_empty(), "patch id missing for {}", c.subject);
+        assert_eq!(c.patch_id, test_patch_id(&dir, &c.sha));
+    }
+    // nothing is local-only once the branch is exactly the remote tip
+    run_git(&dir, &["push", "-q", "origin", "main"]).unwrap();
+    assert!(local_commits(&dir, "origin/main", "HEAD").is_empty());
+    assert!(local_commits(&dir, "HEAD", "HEAD").is_empty());
+}
+
+#[test]
+fn dropped_commits_plain_rebase_reports_nothing() {
+    let (dir, origin, _work2) = pull_repo("drop-plain");
+    // local commit
+    write(&dir, "b.txt", "b\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "local work"]);
+    run_git(&dir, &["push", "-q", "origin", "main"]).unwrap();
+    // remote moves on (second clone pushes an unrelated file)
+    let other = temp_dir("drop-plain-other");
+    std::fs::remove_dir_all(&other).unwrap();
+    let out = std::process::Command::new("git")
+        .args(["clone", "-q", &origin.to_string_lossy(), &other.to_string_lossy()])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    configure_identity(&other);
+    write(&other, "remote.txt", "r\n");
+    git(&other, &["add", "-A"]);
+    git(&other, &["commit", "-qm", "remote work"]);
+    git(&other, &["push", "-q", "origin", "main"]);
+
+    let old = rev(&dir, "HEAD");
+    run_git_env(&dir, &["pull", "--rebase", "origin", "main"], &EDITOR_TRUE).unwrap();
+    // "local work" was replayed (new sha, same patch id): nothing dropped
+    assert!(
+        dropped_rebase_commits(&dir, "origin/main", &old, "HEAD").is_empty(),
+        "{:?}",
+        dropped_rebase_commits(&dir, "origin/main", &old, "HEAD")
+    );
+}
+
+#[test]
+fn dropped_commits_message_only_amend() {
+    let (dir, _origin, _work2) = pull_repo("drop-msg");
+    write(&dir, "a.txt", "base\na1\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "feature"]);
+    run_git(&dir, &["push", "-q", "origin", "main"]).unwrap();
+    // message-only amend of the pushed commit: the replay is a duplicate
+    git(&dir, &["commit", "-q", "--amend", "-m", "feature (amended)"]);
+    let old = rev(&dir, "HEAD");
+
+    let out =
+        run_git_capture(&dir, &["pull", "--rebase", "origin", "main"], &EDITOR_TRUE).unwrap();
+    let dropped = dropped_rebase_commits(&dir, "origin/main", &old, "HEAD");
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert_eq!(dropped[0].sha, old);
+    assert_eq!(dropped[0].subject, "feature (amended)");
+    // git's own wording is in the captured output (shown as decoration)
+    assert!(
+        out.contains("skipped previously applied") || out.contains("dropping"),
+        "{out}"
+    );
+}
+
+#[test]
+fn dropped_commits_subset_amend_and_undo() {
+    let (dir, _origin, _work2) = pull_repo("drop-subset");
+    // b.txt must exist *before* the feature commit so that commit modifies
+    // it (unchecking a file the commit added leaves it untracked, which
+    // makes the rebase refuse over the untracked file instead)
+    write(&dir, "b.txt", "b-old\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "add b"]);
+    run_git(&dir, &["push", "-q", "origin", "main"]).unwrap();
+    // the pushed commit modifies a.txt (added) and b.txt (modified)
+    write(&dir, "a.txt", "base\na1\n");
+    write(&dir, "b.txt", "b-old\nb1\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "feature"]);
+    run_git(&dir, &["push", "-q", "origin", "main"]).unwrap();
+    // uncheck b.txt while amending: the replay only contains changes the
+    // remote already has -> empty -> dropped silently (patch ids differ!)
+    uncommit_path_and_clean(&dir, "b.txt");
+    let old = rev(&dir, "HEAD");
+    assert_eq!(
+        local_commits(&dir, "origin/main", &old)[0].patch_id,
+        test_patch_id(&dir, &old),
+        "the reduced commit has a patch id of its own"
+    );
+    // patch-id based detection alone would miss this case
+    assert!(!run_git_capture(&dir, &["cherry", "origin/main", &old], &[])
+        .unwrap()
+        .starts_with('-'));
+
+    run_git_env(&dir, &["pull", "--rebase", "origin", "main"], &EDITOR_TRUE).unwrap();
+    let dropped = dropped_rebase_commits(&dir, "origin/main", &old, "HEAD");
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert_eq!(dropped[0].sha, old);
+    // the pull undid the removal: b.txt is back with the pushed content
+    assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "b-old\nb1\n");
+
+    // the Undo button: reset --hard back to the pre-pull head
+    run_git(&dir, &["reset", "--hard", &old]).unwrap();
+    assert_eq!(rev(&dir, "HEAD"), old);
+    assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "b-old\n");
+    assert!(git_out(&dir, &["status", "--porcelain"]).trim().is_empty());
+}
+
+#[test]
+fn dropped_commits_mixed_history() {
+    let (dir, _origin, _work2) = pull_repo("drop-mixed");
+    write(&dir, "b.txt", "b-old\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "add b"]);
+    run_git(&dir, &["push", "-q", "origin", "main"]).unwrap();
+    write(&dir, "a.txt", "base\na1\n");
+    write(&dir, "b.txt", "b-old\nb1\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "feature"]);
+    run_git(&dir, &["push", "-q", "origin", "main"]).unwrap();
+    uncommit_path_and_clean(&dir, "b.txt");
+    // plus genuine new local work
+    write(&dir, "n.txt", "n\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "genuine new work"]);
+    let old = rev(&dir, "HEAD");
+
+    run_git_env(&dir, &["pull", "--rebase", "origin", "main"], &EDITOR_TRUE).unwrap();
+    let dropped = dropped_rebase_commits(&dir, "origin/main", &old, "HEAD");
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert_eq!(dropped[0].subject, "feature");
+    // the genuine commit survived (replayed, not reported)
+    assert!(dir.join("n.txt").exists());
+    assert_eq!(
+        local_commits(&dir, "origin/main", "HEAD")
+            .iter()
+            .map(|c| c.subject.as_str())
+            .collect::<Vec<_>>(),
+        ["genuine new work"]
+    );
+}
+
+#[test]
+fn pull_upstream_ref_candidates() {
+    let (dir, _origin, _work2) = pull_repo("upstream-ref");
+    // branch entry given (the remote combo entry and the branch entry)
+    assert_eq!(
+        pull_upstream_ref(&dir, "origin", "main"),
+        Some("origin/main".to_string())
+    );
+    // empty entry: the current branch / its upstream decides
+    assert_eq!(
+        pull_upstream_ref(&dir, "origin", ""),
+        Some("origin/main".to_string())
+    );
+    // a remote without such a ref falls through to one that resolves
+    assert_eq!(
+        pull_upstream_ref(&dir, "nosuchremote", "main"),
+        Some("origin/main".to_string())
+    );
+    // no remote at all: nothing resolves except FETCH_HEAD, which is
+        // absent in a fresh clone-less repo
+    let bare = init_repo("upstream-ref-none");
+    write(&bare, "a.txt", "a\n");
+    git(&bare, &["add", "a.txt"]);
+    git(&bare, &["commit", "-qm", "a"]);
+    assert_eq!(pull_upstream_ref(&bare, "origin", "main"), None);
+}
+
+#[test]
+fn run_git_capture_reports_output_and_errors() {
+    let (dir, _origin, _work2) = pull_repo("capture");
+    let out = run_git_capture(&dir, &["rev-parse", "--abbrev-ref", "HEAD"], &[]).unwrap();
+    assert_eq!(out, "main");
+    let err = run_git_capture(&dir, &["rev-parse", "--verify", "nope"], &[]).unwrap_err();
+    assert!(!err.is_empty());
+}

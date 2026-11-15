@@ -7,7 +7,8 @@ inspired by TortoiseGit. Currently included tools:
 - `gitcommit`: Commit window, supports amending.
 - `gitpush`: Push to remotes, supports including tags, force [with lease], ...
 - `gitpull`: Fetch/pull from a remote (fetch only / merge / rebase) with a
-  conflicts window (3-way meld, commit merge, continue-rebase loop), ...
+  conflicts window (3-way meld, commit merge, continue-rebase loop), reports
+  local commits the rebase dropped silently and can undo the pull, ...
 - `gitrebase`: Currently only used for editing commit details (message/author/...)
 
 Currently supported file managers:

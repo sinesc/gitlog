@@ -364,6 +364,7 @@ fn main() -> ExitCode {
                 "scrollbar.horizontal slider { min-height: 12px; margin: 2px; }
                  scrollbar.vertical slider { min-width: 12px; margin: 2px; }
                  .commit-buttons { margin: 6px; }
+                 .commit-warning { color: @warning_color; }
                  /* the file-list context menu: theme styling targets
                     modelbutton rows (not exported in GTK 4), so the flat
                     buttons in our plain popover need menu-like padding and
@@ -503,11 +504,36 @@ fn main() -> ExitCode {
             amend_check.set_sensitive(false);
         }
 
+        // ---- pushed-commit warning ------------------------------------------
+        // Amending a commit that was already pushed rewrites published
+        // history; the replacement is then either force-pushed or dropped
+        // silently by a later `pull --rebase` (the pre-amend HEAD is the
+        // pushed one, so `is_pushed` decides here)
+        let head_pushed = gl::is_pushed(&repo, "HEAD");
+        let amend_warning = gtk::Label::builder()
+            .label(t!("commit.pushed_amend").as_ref())
+            .margin_start(8)
+            .margin_end(8)
+            .margin_bottom(4)
+            .wrap(true)
+            .xalign(0.0)
+            .selectable(true)
+            .build();
+        amend_warning.add_css_class("commit-warning");
+        amend_warning.set_visible(false);
+
         let top_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
         top_box.append(&msg_scroll);
         top_box.append(&amend_check);
+        top_box.append(&amend_warning);
+        {
+            let warning = amend_warning.clone();
+            amend_check.connect_toggled(move |check| {
+                warning.set_visible(check.is_active() && head_pushed);
+            });
+        }
 
         // ---- buttons -----------------------------------------------------------
         let cancel_button = gtk::Button::builder().label(t!("commit.cancel").as_ref()).build();

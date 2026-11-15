@@ -101,5 +101,12 @@
   "conflicts.commit_merge": "Confirmar merge",
   "conflicts.continue_rebase": "Continuar rebase",
   "error.conflicts_remain": "Quedan archivos sin resolver.",
-  "error.conflict_spreadsheet": "Los conflictos en hojas de cálculo se deben resolver manualmente."
+  "error.conflict_spreadsheet": "Los conflictos en hojas de cálculo se deben resolver manualmente.",
+  "pull.dropped.title": "El rebase descartó commits locales",
+  "pull.dropped.intro": "%{count} de sus commits locales fueron descartados porque sus cambios ya estaban en el remoto (esto suele pasar cuando se amendea un commit después de subirlo):",
+  "pull.dropped.git": "git informó:",
+  "pull.dropped.hint": "Aún no se ha perdido nada - los commits siguen en el reflog. Deshaga el pull con el botón de abajo y luego suba el commit amendeado con \"force with lease\" (gitpush) o convierta la eliminación en un commit aparte.",
+  "pull.undo": "Deshacer el pull",
+  "error.undo_failed": "Deshacer el pull falló: %{error}",
+  "commit.pushed_amend": "Advertencia: el último commit ya fue subido. Amenderlo reescribe la historia publicada - debe forzar el push (gitpush, force with lease), y un pull --rebase posterior descartaría el commit amendeado."
 }

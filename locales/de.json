@@ -101,5 +101,12 @@
   "conflicts.commit_merge": "Merge abschließen",
   "conflicts.continue_rebase": "Rebase fortsetzen",
   "error.conflicts_remain": "Einige Dateien sind noch nicht gelöst.",
-  "error.conflict_spreadsheet": "Konflikte in Tabellen müssen manuell gelöst werden."
+  "error.conflict_spreadsheet": "Konflikte in Tabellen müssen manuell gelöst werden.",
+  "pull.dropped.title": "Rebase hat lokale Commits verworfen",
+  "pull.dropped.intro": "%{count} Ihrer lokalen Commits wurden verworfen, weil ihre Änderungen bereits im Remote waren (das passiert normalerweise, wenn ein Commit nach dem Pushen geändert wurde):",
+  "pull.dropped.git": "git gemeldet:",
+  "pull.dropped.hint": "Noch ist nichts verloren - die Commits sind weiterhin im Reflog. Machen Sie den Pull mit der Schaltfläche unten rückgängig und pushen Sie den geänderten Commit entweder mit \"Force with lease\" (gitpush) oder machen Sie die Entfernung zu einem eigenen Commit.",
+  "pull.undo": "Pull rückgängig machen",
+  "error.undo_failed": "Rückgängigmachen des Pulls fehlgeschlagen: %{error}",
+  "commit.pushed_amend": "Warnung: Der letzte Commit wurde bereits gepusht. Ihn zu amendieren schreibt veröffentlichte Geschichte - Sie müssen ihn force-pushen (gitpush, Force with lease), und ein späterer pull --rebase würde den amendierten Commit verwerfen."
 }

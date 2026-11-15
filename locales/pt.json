@@ -101,5 +101,12 @@
   "conflicts.commit_merge": "Confirmar merge",
   "conflicts.continue_rebase": "Continuar rebase",
   "error.conflicts_remain": "Alguns ficheiros ainda não estão resolvidos.",
-  "error.conflict_spreadsheet": "Conflitos em folhas de cálculo devem ser resolvidos manualmente."
+  "error.conflict_spreadsheet": "Conflitos em folhas de cálculo devem ser resolvidos manualmente.",
+  "pull.dropped.title": "O rebase descartou commits locais",
+  "pull.dropped.intro": "%{count} dos seus commits locais foram descartados porque as suas alterações já estavam no remoto (isto costuma acontecer quando um commit é emendado depois de enviado):",
+  "pull.dropped.git": "o git reportou:",
+  "pull.dropped.hint": "Ainda nada se perdeu - os commits continuam no reflog. Desfaça o pull com o botão abaixo e depois envie o commit emendado com \"force with lease\" (gitpush) ou faça da remoção um commit separado.",
+  "pull.undo": "Desfazer o pull",
+  "error.undo_failed": "Falha ao desfazer o pull: %{error}",
+  "commit.pushed_amend": "Aviso: o último commit já foi enviado. Emendá-lo reescreve o histórico publicado - precisa de fazer force-push (gitpush, force with lease), e um pull --rebase posterior descartaria o commit emendado."
 }

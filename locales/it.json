@@ -101,5 +101,12 @@
   "conflicts.commit_merge": "Conferma merge",
   "conflicts.continue_rebase": "Continua rebase",
   "error.conflicts_remain": "Alcuni file non sono ancora risolti.",
-  "error.conflict_spreadsheet": "I conflitti nei fogli di calcolo vanno risolti a mano."
+  "error.conflict_spreadsheet": "I conflitti nei fogli di calcolo vanno risolti a mano.",
+  "pull.dropped.title": "Il rebase ha scartato commit locali",
+  "pull.dropped.intro": "%{count} dei suoi commit locali sono stati scartati perché le loro modifiche erano già nel remote (succede di solito quando un commit viene amendato dopo essere stato spinto):",
+  "pull.dropped.git": "git ha segnalato:",
+  "pull.dropped.hint": "Non è ancora perso nulla - i commit sono ancora nel reflog. Annulli il pull con il pulsante qui sotto, poi spinga il commit amendato con \"force with lease\" (gitpush) oppure renda la rimozione un commit separato.",
+  "pull.undo": "Annulla il pull",
+  "error.undo_failed": "Annullamento del pull fallito: %{error}",
+  "commit.pushed_amend": "Avviso: l'ultimo commit è già stato spinto. Amendarlo riscrive la storia pubblicata - deve fare un force-push (gitpush, force with lease), e un successivo pull --rebase scarterà il commit amendato."
 }

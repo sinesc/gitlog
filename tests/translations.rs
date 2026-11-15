@@ -186,3 +186,28 @@ fn pull_error_messages_interpolate_in_every_locale() {
         assert!(text.contains("boom"), "{locale}: {text}");
     }
 }
+
+#[test]
+fn dropped_commits_labels_resolve_in_every_locale() {
+    for locale in LOCALES {
+        for key in ["pull.dropped.title", "pull.dropped.git", "pull.undo", "commit.pushed_amend"] {
+            let text = rust_i18n::t!(key, locale = locale);
+            assert!(!text.is_empty() && text != key, "{locale}: {key} -> {text}");
+        }
+        let intro = rust_i18n::t!("pull.dropped.intro", locale = locale, count = 3);
+        assert!(intro.contains('3'), "{locale}: {intro}");
+        assert_ne!(intro, "pull.dropped.intro", "{locale}");
+        let undo = rust_i18n::t!("error.undo_failed", locale = locale, error = "boom");
+        assert!(undo.contains("boom"), "{locale}: {undo}");
+    }
+    // the German wording is checked explicitly (it is the locale the
+    // project is developed with)
+    assert_eq!(
+        rust_i18n::t!("pull.dropped.title", locale = "de"),
+        "Rebase hat lokale Commits verworfen"
+    );
+    assert_eq!(
+        rust_i18n::t!("pull.undo", locale = "de"),
+        "Pull r\u{fc}ckg\u{e4}ngig machen"
+    );
+}

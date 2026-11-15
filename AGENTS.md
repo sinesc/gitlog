@@ -14,6 +14,14 @@ crate ships several binaries (`src/bin/`): `gitlog` (history viewer), `gitcommit
 - Amend mode: unchecking a file resets its index entry to HEAD^ via
   `uncommit_path` (src/gitlog.rs) - never bare `git rm --cached`.
 - `git commit-tree` does not preserve the original author; set `GIT_AUTHOR_*`.
+- `git rebase` silently DROPS local commits whose replay becomes empty or
+  duplicate (amending a pushed commit does exactly that) and still exits 0;
+  gitpull detects it by comparing the local-only commit lists around the pull
+  (`dropped_rebase_commits` in src/gitlog.rs, counterpart = patch-id then
+  subject) and offers an undo (`git reset --hard <pre-pull head>`).
+- A pull must never let git open an editor: pass `GIT_EDITOR=true` and
+  `--no-edit`/`--no-rebase` (divergent pulls otherwise also need the
+  strategy spelled out).
 
 ## i18n & Misc
 

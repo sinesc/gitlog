@@ -101,5 +101,12 @@
   "conflicts.commit_merge": "Valider la fusion",
   "conflicts.continue_rebase": "Poursuivre le rebase",
   "error.conflicts_remain": "Certains fichiers ne sont pas encore résolus.",
-  "error.conflict_spreadsheet": "Les conflits dans les tableurs doivent être résolus manuellement."
+  "error.conflict_spreadsheet": "Les conflits dans les tableurs doivent être résolus manuellement.",
+  "pull.dropped.title": "Le rebase a supprimé des commits locaux",
+  "pull.dropped.intro": "%{count} de vos commits locaux ont été supprimés car leurs changements étaient déjà dans le distant (cela arrive généralement quand un commit est amendé après avoir été poussé) :",
+  "pull.dropped.git": "git a signalé :",
+  "pull.dropped.hint": "Rien n'est perdu pour l'instant - les commits sont toujours dans le reflog. Annulez le pull avec le bouton ci-dessous, puis poussez le commit amendé avec « force with lease » (gitpush) ou faites de la suppression un commit séparé.",
+  "pull.undo": "Annuler le pull",
+  "error.undo_failed": "L'annulation du pull a échoué : %{error}",
+  "commit.pushed_amend": "Avertissement : le dernier commit a déjà été poussé. L'amender réécrit l'historique publié - vous devez le pousser en force (gitpush, force with lease), et un pull --rebase ultérieur supprimerait le commit amendé."
 }

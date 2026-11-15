@@ -101,5 +101,12 @@
   "conflicts.commit_merge": "Commit merge",
   "conflicts.continue_rebase": "Continue rebase",
   "error.conflicts_remain": "Some files are not resolved yet.",
-  "error.conflict_spreadsheet": "Conflicts in spreadsheets must be resolved manually."
+  "error.conflict_spreadsheet": "Conflicts in spreadsheets must be resolved manually.",
+  "pull.dropped.title": "Rebase dropped local commits",
+  "pull.dropped.intro": "%{count} of your local commits were dropped because their changes were already in the remote (this usually happens when a commit is amended after it was pushed):",
+  "pull.dropped.git": "git reported:",
+  "pull.dropped.hint": "Nothing is lost yet - the commits are still in the reflog. Undo the pull with the button below, then either push the amended commit with \"force with lease\" (gitpush) or make the removal a separate commit.",
+  "pull.undo": "Undo pull",
+  "error.undo_failed": "Undoing the pull failed: %{error}",
+  "commit.pushed_amend": "Warning: the last commit has already been pushed. Amending it rewrites published history - you need to force-push it (gitpush, force with lease), and a later pull --rebase would drop the amended commit."
 }

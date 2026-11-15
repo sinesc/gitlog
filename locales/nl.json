@@ -101,5 +101,12 @@
   "conflicts.commit_merge": "Merge afronden",
   "conflicts.continue_rebase": "Rebase voortzetten",
   "error.conflicts_remain": "Sommige bestanden zijn nog niet opgelost.",
-  "error.conflict_spreadsheet": "Conflicten in spreadsheets moeten handmatig worden opgelost."
+  "error.conflict_spreadsheet": "Conflicten in spreadsheets moeten handmatig worden opgelost.",
+  "pull.dropped.title": "Rebase heeft lokale commits verwijderd",
+  "pull.dropped.intro": "%{count} van uw lokale commits zijn verwijderd omdat hun wijzigingen al in de remote zaten (dit gebeurt meestal als een commit na het pushen is amended):",
+  "pull.dropped.git": "git meldde:",
+  "pull.dropped.hint": "Er is nog niets verloren - de commits staan nog in het reflog. Maak de pull ongedaan met de knop hieronder en push de amended commit daarna met \"force with lease\" (gitpush), of maak van de verwijdering een aparte commit.",
+  "pull.undo": "Pull ongedaan maken",
+  "error.undo_failed": "Ongedaan maken van de pull mislukt: %{error}",
+  "commit.pushed_amend": "Waarschuwing: de laatste commit is al gepusht. Ervan amendieren herschrijft gepubliceerde historie - u moet force-pushen (gitpush, force with lease), en een latere pull --rebase zou de amended commit verwijderen."
 }

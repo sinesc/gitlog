@@ -555,6 +555,180 @@ pub fn rebase_continue(repo: &Path) -> Result<(), String> {
     run_git_env(repo, &["rebase", "--continue"], &[("GIT_EDITOR", "true")])
 }
 
+/// Run a git command with extra environment variables, returning the
+/// trimmed stdout+stderr on success (the combined text is what the pull
+/// windows show when git silently skipped something, e.g. a rebase that
+/// dropped a commit). `run_git` discards the output instead.
+pub fn run_git_capture(
+    repo: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["-C", &repo.to_string_lossy()])
+        .args(args)
+        .envs(env.iter().copied())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if msg.is_empty() { "git command failed".into() } else { msg });
+    }
+    let mut text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !err.is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&err);
+    }
+    Ok(text)
+}
+
+/// A local commit: sha, subject and patch-id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalCommit {
+    pub sha: String,
+    pub subject: String,
+    /// Stable patch-id; empty when the commit has no diff of its own
+    /// (a merge commit, or an empty commit)
+    pub patch_id: String,
+}
+
+/// `git show <sha> | git patch-id --stable` -> the stable patch id (""
+/// when the commit produces no patch).
+fn patch_id(repo: &Path, sha: &str) -> String {
+    let shown = Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "show", sha])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+    let Ok(out) = shown else { return String::new() };
+    if !out.status.success() {
+        return String::new();
+    }
+    let mut child = match Command::new("git")
+        .args(["-C", &repo.to_string_lossy(), "patch-id", "--stable"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write as _;
+        let _ = stdin.write_all(&out.stdout);
+    }
+    let done = child.wait_with_output().ok();
+    match done {
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Local-only commits reachable from `rev` but not from `upstream`,
+/// newest first (git's own log order).
+pub fn local_commits(repo: &Path, upstream: &str, rev: &str) -> Vec<LocalCommit> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "show",
+            "-s",
+            "--format=%H%x1f%s",
+            &format!("{upstream}..{rev}"),
+        ])
+        .stderr(Stdio::null())
+        .output();
+    let Ok(out) = output else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\x1f');
+            let (Some(sha), Some(subject)) = (fields.next(), fields.next()) else {
+                return None;
+            };
+            Some(LocalCommit {
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+                patch_id: patch_id(repo, sha),
+            })
+        })
+        .collect()
+}
+
+/// The local commits of `old_head` that a rebase pull dropped: entries of
+/// the old local-only list with no counterpart in the new one. A replayed
+/// commit keeps its patch-id and subject while its sha changes, so the
+/// counterpart match uses the patch-id first and the subject as a
+/// fallback (commits whose patch became empty have neither in the new
+/// history). Limitation: two local commits sharing a subject can mask
+/// each other.
+pub fn dropped_rebase_commits(
+    repo: &Path,
+    upstream: &str,
+    old_head: &str,
+    new_head: &str,
+) -> Vec<LocalCommit> {
+    let before = local_commits(repo, upstream, old_head);
+    let after = local_commits(repo, upstream, new_head);
+    before
+        .into_iter()
+        .filter(|c| {
+            let matched = after.iter().any(|a| {
+                (!c.patch_id.is_empty() && a.patch_id == c.patch_id) || a.subject == c.subject
+            });
+            !matched
+        })
+        .collect()
+}
+
+/// The ref a `pull <remote> [<branch>]` rebased onto, best effort: the
+/// first candidate that resolves to a commit. Candidates: the selected
+/// `<remote>/<branch>` (when the entry is not empty), `<remote>/<current
+/// branch>`, the current branch's own upstream, `FETCH_HEAD`.
+pub fn pull_upstream_ref(repo: &Path, remote: &str, branch: &str) -> Option<String> {
+    let current = current_branch(repo);
+    let mut candidates: Vec<String> = Vec::new();
+    if !branch.is_empty() {
+        candidates.push(format!("{remote}/{branch}"));
+    }
+    if !current.is_empty() {
+        candidates.push(format!("{remote}/{current}"));
+    }
+    if let Some((r, b)) = upstream_of(repo) {
+        candidates.push(format!("{r}/{b}"));
+    }
+    candidates.push("FETCH_HEAD".into());
+    candidates.into_iter().find(|name| {
+        Command::new("git")
+            .args([
+                "-C",
+                &repo.to_string_lossy(),
+                "rev-parse",
+                "--verify",
+                "-q",
+                &format!("{name}^{{commit}}"),
+            ])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+}
+
 /// Stage the working-tree state of one path.
 pub fn stage_path(repo: &Path, path: &str) -> Result<(), String> {
     run_git(repo, &["add", "-A", "--", path])

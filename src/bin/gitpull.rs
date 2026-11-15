@@ -9,9 +9,11 @@
 //! real work-tree file / theirs :3) and drives "Commit merge" or the
 //! multi-step "Continue rebase" loop (abort is always available).
 
+use std::cell::Cell;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -55,7 +57,7 @@ fn add_row<W: IsA<gtk::Widget>>(form: &gtk::Box, label: &str, widget: &W) {
 
 /// Error/info dialog with a **selectable** text view (same as gitpush's,
 /// copied because binaries cannot import from each other).
-fn error_dialog(parent: &gtk::Window, text: &str) {
+fn error_dialog<W: IsA<gtk::Window>>(parent: &W, text: &str) {
     let dialog = gtk::Dialog::builder()
         .transient_for(parent)
         .modal(true)
@@ -397,6 +399,98 @@ fn show_conflicts(win: &gtk::Window, repo: &Path) {
         });
     }
 
+    dialog.show();
+}
+
+/// Report the local commits a rebase pull silently dropped. The rebase
+/// replays every local-only commit onto the remote tip and drops the ones
+/// that become empty or duplicate there (the usual cause: a commit amended
+/// after it was pushed), exiting 0 with nothing but a stderr warning. The
+/// dialog offers to undo the pull (`git reset --hard <old head>`): after an
+/// undo the pull window stays open (retry with fetch+merge, or force-push
+/// the amended commit), while accepting the result closes it - there is
+/// nothing left to do in the pull window then.
+fn dropped_dialog(parent: &gtk::Window, output: &str, dropped: &[gl::LocalCommit], old_head: &str, repo: &Path) {
+    let mut body = t!("pull.dropped.intro", count = dropped.len()).into_owned();
+    for c in dropped {
+        let short = if c.sha.len() > 8 { &c.sha[..8] } else { &c.sha };
+        body.push_str(&format!("\n  {short} {}", c.subject));
+    }
+    // git's own wording, kept as extra detail when it is there
+    let lines: Vec<String> = output
+        .lines()
+        .filter(|l| {
+            let l = l.trim_start();
+            l.starts_with("dropping") || l.contains("skipped previously applied")
+        })
+        .map(|l| l.to_string())
+        .collect();
+    if !lines.is_empty() {
+        body.push_str("\n\n");
+        body.push_str(&t!("pull.dropped.git"));
+        for l in lines {
+            body.push_str(&format!("\n{l}"));
+        }
+    }
+    body.push_str("\n\n");
+    body.push_str(&t!("pull.dropped.hint").into_owned());
+
+    let dropped_title = t!("pull.dropped.title").into_owned();
+    let dialog = gtk::Dialog::builder()
+        .transient_for(parent)
+        .modal(true)
+        .title(&dropped_title)
+        .default_width(680)
+        .default_height(340)
+        .build();
+    let view = gtk::TextView::builder()
+        .editable(false)
+        .cursor_visible(true)
+        .wrap_mode(gtk::WrapMode::Word)
+        .left_margin(8)
+        .right_margin(8)
+        .top_margin(8)
+        .build();
+    view.buffer().set_text(&body);
+    let scroll = gtk::ScrolledWindow::builder()
+        .vexpand(true)
+        .hexpand(true)
+        .build();
+    scroll.set_child(Some(&view));
+    dialog.content_area().append(&scroll);
+    dialog.add_button(&t!("error.close"), gtk::ResponseType::Close);
+    dialog
+        .add_button(&t!("pull.undo"), gtk::ResponseType::Accept)
+        .grab_focus();
+    let repo = repo.to_path_buf();
+    let old_head = old_head.to_string();
+    let pull_window = parent.clone();
+    // closing a dialog re-enters the response handler with DELETE_EVENT;
+    // this flag tells the second pass that the undo already ran
+    let undone = Rc::new(Cell::new(false));
+    let undone2 = undone.clone();
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            // undo the pull: back to the head captured before it ran
+            if let Err(e) = gl::run_git(&repo, &["reset", "--hard", &old_head]) {
+                let text = t!("error.undo_failed", error = &e).into_owned();
+                error_dialog(dialog, &text);
+                return; // keep the report open so the user can retry
+            }
+            // the history is back: keep the pull window open so the user
+            // can retry with fetch+merge or push with force-with-lease
+            undone2.set(true);
+            dialog.close();
+            return;
+        }
+        if undone2.get() {
+            return; // the dialog's own close event after a successful undo
+        }
+        // the pull stands as it is: closing the report closes the pull
+        // window too (nothing left to do in it)
+        dialog.close();
+        pull_window.close();
+    });
     dialog.show();
 }
 
@@ -754,12 +848,16 @@ fn main() -> ExitCode {
                     Mode::Merge
                 };
                 let squash = squash_c.is_active();
+                // remote and branch as the command addresses them; the
+                // rebase-drop check needs both to resolve the upstream ref
+                let remote_for_ref = remote.clone();
+                let branch_for_ref = branch_e.text().trim().to_string();
                 let args = {
                     let no_ff = no_ff_c.is_active();
                     let ff_only = ff_only_c.is_active();
                     let tags = tags_c.is_active();
                     let prune = prune_c.is_active();
-                    let branch = branch_e.text().trim().to_string();
+                    let branch = branch_for_ref.clone();
                     let mut args: Vec<String> = Vec::new();
                     match mode {
                         Mode::Fetch => args.push("fetch".into()),
@@ -806,7 +904,13 @@ fn main() -> ExitCode {
                 // squash leaves the combined changes staged with no commit:
                 // open gitcommit on success so the user commits them there
                 let spawn_commit = mode == Mode::Merge && squash;
-                let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+                // head before the pull: the undo target and the reference
+                // point for detecting commits the rebase dropped
+                let old_head = gl::run_git_capture(&repo, &["rev-parse", "-q", "HEAD"], &[])
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
                 let rx = Arc::new(Mutex::new(rx));
                 busy.store(true, Ordering::Relaxed);
                 button.set_sensitive(false);
@@ -814,10 +918,35 @@ fn main() -> ExitCode {
                 let busy2 = busy.clone();
                 let button2 = button.clone();
                 let repo2 = repo.clone();
+                // the ref the pull rebased onto (remote + branch entry),
+                // needed to spot commits the rebase dropped
+                let remote_for_ref = remote_for_ref.clone();
+                let branch_for_ref = branch_for_ref.clone();
                 glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
                     match rx.lock().unwrap().try_recv() {
-                        Ok(Ok(())) => {
+                        Ok(Ok(output)) => {
                             busy2.store(false, Ordering::Relaxed);
+                            // rebase can drop local commits without any
+                            // error: look for them before declaring success
+                            let dropped = if mode == Mode::Rebase && !old_head.is_empty() {
+                                gl::pull_upstream_ref(&repo2, &remote_for_ref, &branch_for_ref)
+                                    .map(|upstream| {
+                                        gl::dropped_rebase_commits(
+                                            &repo2,
+                                            &upstream,
+                                            &old_head,
+                                            "HEAD",
+                                        )
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            };
+                            if !dropped.is_empty() {
+                                button2.set_sensitive(true);
+                                dropped_dialog(&win2, &output, &dropped, &old_head, &repo2);
+                                return glib::ControlFlow::Break;
+                            }
                             if spawn_commit {
                                 if let Err(e) =
                                     std::process::Command::new("gitcommit").arg(&repo2).spawn()
@@ -856,8 +985,10 @@ fn main() -> ExitCode {
                 std::thread::spawn(move || {
                     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
                     // GIT_EDITOR=true: git must never open an interactive
-                    // editor from this thread (no terminal attached)
-                    let _ = tx.send(gl::run_git_env(
+                    // editor from this thread (no terminal attached). The
+                    // captured output lets the UI quote git's own drop
+                    // warnings when a rebase skipped commits.
+                    let _ = tx.send(gl::run_git_capture(
                         &repo,
                         &refs,
                         &[("GIT_EDITOR", "true")],
